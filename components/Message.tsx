@@ -1,0 +1,605 @@
+"use client";
+import clsx from "clsx";
+import {
+  AlertTriangle,
+  Brain,
+  Check,
+  CheckCheck,
+  Download,
+  ChevronRight,
+  FilePen,
+  FilePlus2,
+  Undo2,
+  Zap,
+  FileSearch,
+  FileText,
+  FolderTree,
+  CircleDot,
+  GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
+  Globe,
+  Image as ImageIcon,
+  PlayCircle,
+  Link2,
+  Loader2,
+  Pencil,
+  RotateCcw,
+  Search,
+  Settings as SettingsIcon,
+  Trash2,
+  X,
+} from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
+import { formatBytes } from "@/lib/client";
+import { formatCost, formatTokens } from "@/lib/tokens";
+import { MODELS, type AssistantMessage, type AssistantStep, type Attachment, type ToolCall, type UserMessage } from "@/lib/types";
+import { DiffView } from "./DiffView";
+import { CopyButton, Markdown } from "./Markdown";
+import { Button, MenuItem, Popover } from "./ui";
+
+export function AttachmentChip({
+  a,
+  onRemove,
+  loading,
+  error,
+}: {
+  a: Attachment;
+  onRemove?: () => void;
+  loading?: boolean;
+  error?: string;
+}) {
+  const src = a.dataUrl ?? (a.upload ? `/api/uploads/${a.upload}` : null);
+  if (a.kind === "image" && src && !error) {
+    return (
+      <div className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-line bg-surface-2" title={a.name}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={a.name} className="h-full w-full object-cover" />
+        {onRemove && <RemoveButton onClick={onRemove} />}
+      </div>
+    );
+  }
+  const Icon = a.kind === "image" ? ImageIcon : FileText;
+  return (
+    <div
+      className={clsx(
+        "group relative flex h-12 max-w-60 shrink-0 items-center gap-2.5 rounded-xl border px-2.5",
+        error ? "border-danger/40 bg-danger-soft" : "border-line bg-surface",
+      )}
+      title={error ?? a.name}
+    >
+      <div className={clsx("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", error ? "text-danger" : "bg-accent-soft text-accent")}>
+        {loading ? <Loader2 size={15} className="animate-spin" /> : error ? <AlertTriangle size={15} /> : <Icon size={15} />}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-[12.5px] font-medium">{a.name.split("/").pop()}</div>
+        <div className="truncate text-[11px] text-muted">
+          {error
+            ? error
+            : loading
+              ? "Reading…"
+              : a.kind === "image"
+                ? formatBytes(a.size)
+                : `${formatTokens(Math.ceil(a.size / 4))} tokens${a.truncated ? " · cut off" : ""}${a.name.includes("/") ? ` · ${a.name.split("/").slice(0, -1).join("/")}` : ""}`}
+        </div>
+      </div>
+      {onRemove && <RemoveButton onClick={onRemove} />}
+    </div>
+  );
+}
+
+function RemoveButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Remove attachment"
+      className="absolute -right-1.5 -top-1.5 hidden h-5 w-5 items-center justify-center rounded-full border border-line bg-surface text-muted shadow-sm hover:text-fg group-hover:flex"
+    >
+      <X size={11} />
+    </button>
+  );
+}
+
+export const UserBubble = memo(function UserBubble({
+  message,
+  onEdit,
+  canEdit,
+}: {
+  message: UserMessage;
+  onEdit: (text: string) => void;
+  canEdit: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(message.text);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (editing && ref.current) {
+      ref.current.focus();
+      ref.current.style.height = "auto";
+      ref.current.style.height = ref.current.scrollHeight + "px";
+    }
+  }, [editing]);
+
+  return (
+    <div className="group flex flex-col items-end gap-1.5">
+      {message.attachments.length > 0 && (
+        <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
+          {message.attachments.map((a) => (
+            <AttachmentChip key={a.id} a={a} />
+          ))}
+        </div>
+      )}
+      {editing ? (
+        <div className="w-full max-w-[85%] rounded-2xl border border-line-strong bg-surface p-3">
+          <textarea
+            ref={ref}
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              e.target.style.height = "auto";
+              e.target.style.height = e.target.scrollHeight + "px";
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (draft.trim()) {
+                  setEditing(false);
+                  onEdit(draft);
+                }
+              }
+              if (e.key === "Escape") setEditing(false);
+            }}
+            className="max-h-[50vh] w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none"
+          />
+          <div className="mt-2 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!draft.trim()}
+              onClick={() => {
+                setEditing(false);
+                onEdit(draft);
+              }}
+            >
+              Send
+            </Button>
+          </div>
+        </div>
+      ) : (
+        message.text && (
+          <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed [overflow-wrap:anywhere]">
+            {message.text}
+          </div>
+        )
+      )}
+      {!editing && (
+        <div className="flex h-6 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <CopyButton text={message.text} />
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(message.text);
+                setEditing(true);
+              }}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+            >
+              <Pencil size={13} /> Edit
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function Thinking({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const expanded = open || active;
+  useEffect(() => {
+    if (active && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [text, active]);
+  return (
+    <div className="my-2">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 rounded-lg py-1 pr-2 text-[13px] text-muted hover:text-fg"
+      >
+        <Brain size={14} />
+        <span className={active ? "shimmer-text" : ""}>{active ? "Thinking…" : "Thought process"}</span>
+        <ChevronRight size={14} className={clsx("transition-transform", expanded && "rotate-90")} />
+      </button>
+      {expanded && (
+        <div
+          ref={ref}
+          className={clsx(
+            "mt-1 whitespace-pre-wrap border-l-2 border-line pl-3.5 text-[13.5px] leading-relaxed text-muted",
+            active && "max-h-56 overflow-y-auto",
+          )}
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const TOOL_ICONS: Record<string, typeof FileText> = {
+  list_directory: FolderTree,
+  read_file: FileText,
+  search_files: Search,
+  find_files: FileSearch,
+  web_search: Globe,
+  read_webpage: Link2,
+  list_documents: FolderTree,
+  read_document: FileText,
+  github_list_repos: GitBranch,
+  github_browse: GitBranch,
+  github_search_code: Search,
+  github_issues: CircleDot,
+  github_pull_requests: GitPullRequest,
+  github_commits: GitCommitHorizontal,
+  github_ci_runs: PlayCircle,
+};
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url || "page";
+  }
+}
+
+function pendingLabel(call: ToolCall): string {
+  let args: Record<string, string> = {};
+  try {
+    args = JSON.parse(call.args || "{}");
+  } catch {}
+  switch (call.name) {
+    case "list_directory":
+      return `Listing ${args.path && args.path !== "." ? args.path : "project"}…`;
+    case "read_file":
+      return `Reading ${args.path ?? "file"}…`;
+    case "search_files":
+      return `Searching for "${args.pattern ?? ""}"…`;
+    case "find_files":
+      return `Finding ${args.pattern ?? "files"}…`;
+    case "web_search":
+      return `Searching the web for "${args.query ?? ""}"…`;
+    case "read_webpage":
+      return `Reading ${hostOf(args.url ?? "")}…`;
+    case "list_documents":
+      return "Looking at your docs…";
+    case "read_document":
+      return `Reading doc ${args.path ?? ""}…`;
+    case "github_list_repos":
+      return "Checking your allowed GitHub repos…";
+    case "github_browse":
+      return `Reading ${args.repo ?? "repo"}/${args.path ?? ""}…`;
+    case "github_search_code":
+      return `Searching ${args.repo ?? "repo"} for "${args.query ?? ""}"…`;
+    case "github_issues":
+      return args.number ? `Reading issue #${args.number} in ${args.repo}…` : `Listing issues in ${args.repo ?? "repo"}…`;
+    case "github_pull_requests":
+      return args.number ? `Reading PR #${args.number} in ${args.repo}…` : `Listing pull requests in ${args.repo ?? "repo"}…`;
+    case "github_commits":
+      return `Reading commits in ${args.repo ?? "repo"}…`;
+    case "github_ci_runs":
+      return `Checking CI for ${args.repo ?? "repo"}…`;
+    default:
+      return `${call.name}…`;
+  }
+}
+
+function ToolCard({ call }: { call: ToolCall }) {
+  const [open, setOpen] = useState(false);
+  const Icon = TOOL_ICONS[call.name] ?? FileText;
+  const done = call.summary !== undefined;
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => done && setOpen((o) => !o)}
+        className={clsx(
+          "inline-flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1 text-[12.5px] hover:bg-hover",
+          call.ok === false ? "text-danger" : "text-muted",
+        )}
+      >
+        {done ? <Icon size={13} className="shrink-0" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
+        <span className="truncate">{done ? call.summary : pendingLabel(call)}</span>
+        {done && call.result && <ChevronRight size={13} className={clsx("shrink-0 transition-transform", open && "rotate-90")} />}
+      </button>
+      {open && call.sources?.length ? (
+        <div className="mt-1.5 max-w-xl space-y-0.5 rounded-lg border border-line bg-surface p-1.5">
+          {call.sources.map((src, i) => (
+            <a
+              key={src.url + i}
+              href={src.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="flex items-baseline gap-2 rounded-md px-2 py-1 text-[12.5px] hover:bg-hover"
+            >
+              <span className="truncate text-fg">{src.title}</span>
+              <span className="shrink-0 text-[11.5px] text-faint">{hostOf(src.url)}</span>
+            </a>
+          ))}
+        </div>
+      ) : open && call.result && (
+        <pre className="mt-1.5 max-h-72 overflow-auto rounded-lg border border-line bg-code px-3 py-2 font-mono text-[12px] leading-relaxed text-muted">
+          {call.result.length > 20000 ? call.result.slice(0, 20000) + "\n…" : call.result}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+const EDIT_TOOLS = new Set(["edit_file", "write_file", "delete_file", "save_document"]);
+export type Decide = (callId: string, decision: "approve" | "reject" | "approve_remember") => void;
+
+const KIND_UI = {
+  create: { icon: FilePlus2, label: "New file" },
+  edit: { icon: FilePen, label: "Edit" },
+  overwrite: { icon: FilePen, label: "Rewrite" },
+  delete: { icon: Trash2, label: "Delete" },
+} as const;
+
+// A proposed or applied file change, with its before/after preview.
+function EditCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) {
+  const [open, setOpen] = useState(false);
+  const [sent, setSent] = useState<"approve" | "reject" | null>(null);
+  const [remember, setRemember] = useState(false);
+  const d = call.diff;
+  let path = "";
+  try {
+    path = JSON.parse(call.args || "{}").path ?? "";
+  } catch {}
+  if (!d) {
+    const failed = call.summary !== undefined;
+    return (
+      <div className={clsx("my-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1 text-[12.5px]", failed ? "text-danger" : "text-muted")}>
+        {failed ? <AlertTriangle size={13} className="shrink-0" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
+        <span className="truncate">{failed ? call.summary : `Preparing a change to ${path || "a file"}…`}</span>
+      </div>
+    );
+  }
+  const pending = call.status === "pending";
+  const { icon: Icon, label: kindLabel } = KIND_UI[d.kind];
+  const label = d.doc ? (d.kind === "create" ? "Save new doc" : "Update doc") : kindLabel;
+  const expanded = pending || open;
+  return (
+    <div className={clsx("my-2 overflow-hidden rounded-xl border bg-surface", pending ? "border-accent/50 shadow-sm" : "border-line")}>
+      <button
+        type="button"
+        onClick={() => !pending && setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] hover:bg-hover"
+      >
+        <Icon size={14} className={d.kind === "delete" ? "text-danger" : "text-accent"} />
+        <span className="shrink-0 font-medium">{label}</span>
+        <span className="min-w-0 truncate font-mono text-[12px] text-muted">{d.path}</span>
+        <span className="shrink-0 font-mono text-[11.5px]">
+          {d.added > 0 && <span className="text-green-700 dark:text-green-400">+{d.added}</span>}
+          {d.removed > 0 && <span className="ml-1 text-red-700 dark:text-red-400">−{d.removed}</span>}
+        </span>
+        <span className="flex-1" />
+        {call.status === "applied" && (
+          <span className="inline-flex shrink-0 items-center gap-1 text-[11.5px] text-green-700 dark:text-green-400">
+            <Check size={12} /> Applied
+          </span>
+        )}
+        {call.status === "rejected" && <span className="shrink-0 text-[11.5px] text-faint">Rejected</span>}
+        {call.ok === false && !call.status && <span className="shrink-0 truncate text-[11.5px] text-danger">{call.summary}</span>}
+        {!pending && <ChevronRight size={13} className={clsx("shrink-0 text-muted transition-transform", open && "rotate-90")} />}
+      </button>
+      {expanded && (
+        <div className="border-t border-line">
+          <DiffView diff={d} />
+        </div>
+      )}
+      {pending && onDecide && (
+        <div className="flex items-center justify-end gap-2 border-t border-line bg-app px-3 py-2">
+          <span className="mr-auto text-[12px] text-muted">
+            {sent ? "Sending…" : d.doc ? "DeepSeek wants to save this to your Docs folder" : "DeepSeek wants to make this change"}
+          </span>
+          {d.doc && !sent && (
+            <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Future saves to this doc won't ask. You can undo this in Settings → Docs folder.">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
+              Don&apos;t ask again for this doc
+            </label>
+          )}
+          <Button
+            variant="secondary"
+            disabled={!!sent}
+            onClick={() => {
+              setSent("reject");
+              onDecide(call.id, "reject");
+            }}
+          >
+            <X size={13} /> Reject
+          </Button>
+          <Button
+            variant="primary"
+            disabled={!!sent}
+            onClick={() => {
+              setSent("approve");
+              onDecide(call.id, d.doc && remember ? "approve_remember" : "approve");
+            }}
+          >
+            <Check size={13} /> Approve
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Step({ step, active, streaming, onDecide }: { step: AssistantStep; active: boolean; streaming: boolean; onDecide?: Decide }) {
+  return (
+    <>
+      {step.reasoning && <Thinking text={step.reasoning} active={active && !step.content && !step.toolCalls?.length} />}
+      {step.content && <Markdown text={step.content} streaming={streaming && active && !step.toolCalls?.length} />}
+      {step.toolCalls?.map((c) => (EDIT_TOOLS.has(c.name) ? <EditCard key={c.id} call={c} onDecide={onDecide} /> : <ToolCard key={c.id} call={c} />))}
+    </>
+  );
+}
+
+export const AssistantBlock = memo(function AssistantBlock({
+  message,
+  streaming,
+  isLast,
+  onRegenerate,
+  onOpenSettings,
+  onDecide,
+  onApproveAll,
+  onUndo,
+  onSave,
+}: {
+  message: AssistantMessage;
+  streaming: boolean;
+  isLast: boolean;
+  onRegenerate: () => void;
+  onOpenSettings: () => void;
+  onDecide?: Decide;
+  onApproveAll?: () => void;
+  onUndo?: () => void;
+  onSave?: (mode: "new" | "append") => void;
+}) {
+  const [saveOpen, setSaveOpen] = useState(false);
+  const text = message.steps.map((s) => s.content).filter(Boolean).join("\n\n");
+  const pendingCalls = message.steps.flatMap((s) => s.toolCalls ?? []).filter((c) => c.status === "pending");
+  // "Switch to Auto" grants code-editing rights, so only offer it when code changes are waiting (not just doc saves).
+  const offerAuto = !!onApproveAll && pendingCalls.some((c) => !c.diff?.doc);
+  const changedFiles = new Set(message.changes?.map((c) => c.path) ?? []).size;
+  const nothingYet = message.steps.every((s) => !s.content && !s.reasoning && !s.toolCalls?.length);
+  const keyProblem = message.error && /api key|Settings/i.test(message.error);
+  return (
+    <div className="group">
+      {streaming && nothingYet && (
+        <div className="flex h-7 items-center gap-1.5 text-muted">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+        </div>
+      )}
+      {message.steps.map((s, i) => (
+        <Step key={i} step={s} active={streaming && i === message.steps.length - 1} streaming={streaming} onDecide={onDecide} />
+      ))}
+      {pendingCalls.length > 1 && onDecide && (
+        <div className="my-2 flex flex-wrap items-center gap-2 rounded-xl bg-accent-soft px-3 py-2 text-[12.5px] text-accent">
+          <span className="mr-auto font-medium">{pendingCalls.length} changes are waiting for you</span>
+          <Button variant="secondary" onClick={() => pendingCalls.forEach((c) => onDecide(c.id, "approve"))}>
+            <CheckCheck size={13} /> Approve all
+          </Button>
+          {offerAuto && (
+            <Button variant="ghost" onClick={onApproveAll}>
+              <Zap size={13} /> Switch to Auto
+            </Button>
+          )}
+        </div>
+      )}
+      {pendingCalls.length === 1 && offerAuto && (
+        <button type="button" onClick={onApproveAll} className="mb-1 text-[12px] text-muted underline-offset-2 hover:text-fg hover:underline">
+          Approve this and switch to Auto (no more asking in this chat)
+        </button>
+      )}
+      {message.stopped && <div className="mt-2 text-xs text-faint">Stopped</div>}
+      {message.error && (
+        <div className="mt-2 flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-soft px-3.5 py-2.5 text-[13.5px] text-danger">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <div className="flex-1">{message.error}</div>
+          <div className="flex shrink-0 gap-1.5">
+            {keyProblem && (
+              <Button variant="secondary" onClick={onOpenSettings}>
+                <SettingsIcon size={13} /> Settings
+              </Button>
+            )}
+            {isLast && (
+              <Button variant="secondary" onClick={onRegenerate}>
+                <RotateCcw size={13} /> Retry
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+      {!streaming && (text || message.usage || changedFiles > 0) && (
+        <div
+          className={clsx(
+            "mt-1.5 flex h-6 items-center gap-0.5 transition-opacity",
+            isLast || (changedFiles > 0 && !message.undone) ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+          )}
+        >
+          {text && <CopyButton text={text} />}
+          {text && onSave && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setSaveOpen((o) => !o)}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+                title="Save this reply to a file"
+              >
+                <Download size={13} /> Save
+              </button>
+              <Popover open={saveOpen} onClose={() => setSaveOpen(false)} className="bottom-full left-0 mb-1 w-56">
+                <MenuItem
+                  icon={<FilePlus2 size={14} />}
+                  onClick={() => {
+                    setSaveOpen(false);
+                    onSave("new");
+                  }}
+                >
+                  Save as new file…
+                </MenuItem>
+                <MenuItem
+                  icon={<FilePen size={14} />}
+                  onClick={() => {
+                    setSaveOpen(false);
+                    onSave("append");
+                  }}
+                >
+                  Add to end of a file…
+                </MenuItem>
+              </Popover>
+            </div>
+          )}
+          {changedFiles > 0 &&
+            (message.undone ? (
+              <span className="inline-flex items-center gap-1 px-1.5 text-xs text-faint">
+                <Undo2 size={13} /> Changes undone
+              </span>
+            ) : (
+              onUndo && (
+                <button
+                  type="button"
+                  onClick={onUndo}
+                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+                  title="Put every file this reply changed back the way it was"
+                >
+                  <Undo2 size={13} /> Undo changes ({changedFiles} file{changedFiles === 1 ? "" : "s"})
+                </button>
+              )
+            ))}
+          {isLast && !message.error && (
+            <button
+              type="button"
+              onClick={onRegenerate}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg"
+            >
+              <RotateCcw size={13} /> Retry
+            </button>
+          )}
+          <span className="ml-2 text-[11.5px] text-faint">
+            {MODELS[message.model]?.label ?? message.model}
+            {message.usage && message.usage.completionTokens > 0 && (
+              <>
+                {" · "}
+                {formatTokens(message.usage.completionTokens)} tokens out · {formatCost(message.usage.cost)}
+              </>
+            )}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+});
