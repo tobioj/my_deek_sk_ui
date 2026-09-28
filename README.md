@@ -13,6 +13,10 @@ The first launch builds the app (about 30 seconds). After that it opens instantl
 Closing the window leaves a small background server running so the app reopens instantly.
 Other commands: `deepseek-chat status`, `deepseek-chat stop`, `deepseek-chat restart`, `deepseek-chat logs`.
 
+### On Windows
+
+From the app folder in PowerShell: `npm install`, then `powershell -ExecutionPolicy Bypass -File scripts\windows\install.ps1`. That adds a **DeepSeek Chat** shortcut (Desktop and Start menu) and the `deepseek-chat` command, with the same subcommands as on the Mac. Keys are stored encrypted with your Windows login, and the folder and save dialogs are Windows' own.
+
 ## Your API key
 
 The key lives in the macOS Keychain, never in a file and never in the browser. Set it either way:

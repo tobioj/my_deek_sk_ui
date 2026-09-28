@@ -45,8 +45,11 @@ const BINARY_EXTS = new Set([
   ".ckpt", ".tflite", ".mlmodel",
 ]);
 
+// The last part of a path, whether it uses / (macOS, relative paths) or \ (Windows).
+const lastPart = (p: string) => p.split(/[\\/]/).pop() ?? p;
+
 function ext(name: string): string {
-  const base = name.split("/").pop() ?? name;
+  const base = lastPart(name);
   const i = base.lastIndexOf(".");
   return i > 0 ? base.slice(i).toLowerCase() : "";
 }
@@ -56,7 +59,7 @@ export function isSkippedDir(name: string): boolean {
 }
 
 export function isSecretFile(name: string): boolean {
-  const base = (name.split("/").pop() ?? name).toLowerCase();
+  const base = lastPart(name).toLowerCase();
   if (base === ".env" || (base.startsWith(".env.") && !ENV_ALLOWED.has(base))) return true;
   if (base.endsWith(".env") && base !== ".env") return true; // e.g. production.env
   if (SECRET_NAMES.has(base) || SECRET_NAMES.has(base.replace(/\.pub$/, ""))) return true;
@@ -64,18 +67,18 @@ export function isSecretFile(name: string): boolean {
 }
 
 export function isBinaryName(name: string): boolean {
-  const base = name.split("/").pop() ?? name;
+  const base = lastPart(name);
   return base === ".DS_Store" || base === "Thumbs.db" || base === ".coverage" || BINARY_EXTS.has(ext(name));
 }
 
 export function isNoisyFile(name: string): boolean {
-  const base = name.split("/").pop() ?? name;
+  const base = lastPart(name);
   return NOISY_NAMES.has(base) || /\.min\.(js|css)$/.test(base) || base.endsWith(".map");
 }
 
 // Returns a reason the file shouldn't be attached, or null if it's fine.
 export function skipReason(path: string, size: number): string | null {
-  if (path.split("/").some((part) => SKIP_DIRS.has(part))) return "ignored folder";
+  if (path.split(/[\\/]/).some((part) => SKIP_DIRS.has(part))) return "ignored folder";
   if (isSecretFile(path)) return "may contain secrets";
   if (isBinaryName(path)) return "not a text file";
   if (isNoisyFile(path)) return "generated / lock file";

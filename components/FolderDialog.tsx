@@ -7,6 +7,7 @@ import { nanoid } from "nanoid";
 import { useMemo, useState } from "react";
 import { api, formatBytes, type LocalFile } from "@/lib/client";
 import { formatTokens } from "@/lib/tokens";
+import { baseName } from "@/lib/folders";
 import type { Attachment, FolderScan } from "@/lib/types";
 import { Button, Modal } from "./ui";
 
@@ -192,7 +193,7 @@ function FolderDialogBody({ open, onClose, dropped, onAttach, onSetWorkspace }: 
       {!reviewing && (
         <div className="space-y-4">
           <p className="text-[13.5px] leading-relaxed text-muted">
-            Choose a folder on your Mac. You can then let DeepSeek <b className="text-fg">explore it on its own</b> (it reads whatever
+            Choose a folder on this computer. You can then let DeepSeek <b className="text-fg">explore it on its own</b> (it reads whatever
             files it needs, the way Claude Code does) or <b className="text-fg">attach specific files</b> to your message.
           </p>
           <Button variant="primary" onClick={browse} disabled={!!busy} className="h-10 w-full text-[14px]">
@@ -228,7 +229,7 @@ function FolderDialogBody({ open, onClose, dropped, onAttach, onSetWorkspace }: 
                     className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] hover:bg-hover"
                   >
                     <FolderOpen size={14} className="shrink-0 text-muted" />
-                    <span className="font-medium">{r.split("/").pop()}</span>
+                    <span className="font-medium">{baseName(r)}</span>
                     <span className="truncate text-xs text-faint">{r}</span>
                   </button>
                 ))}

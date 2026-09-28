@@ -155,7 +155,7 @@ export function GitHubSection({
           <>
             {" "}
             Token ending in <span className="font-mono">…{status.hint}</span>{" "}
-            {status.source === "env" ? "comes from .env.local (GITHUB_TOKEN)" : status.source === "settings" ? "is saved in data/settings.json" : "is saved in your Keychain"}.
+            {status.source === "env" ? "comes from .env.local (GITHUB_TOKEN)" : status.source === "settings" ? "is saved in data/settings.json" : status.source === "windows" ? "is saved encrypted with your Windows login" : "is saved in your Keychain"}.
           </>
         )}
       </p>

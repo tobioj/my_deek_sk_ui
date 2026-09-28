@@ -25,6 +25,21 @@ Everything you need, in one place. Type the commands in **Terminal**.
 
 The app lives at **http://127.0.0.1:3456** and is only reachable from your Mac.
 
+## 2b. On Windows
+
+One-time setup, from the app folder in PowerShell:
+
+```
+npm install
+powershell -ExecutionPolicy Bypass -File scripts\windows\install.ps1
+```
+
+This adds **DeepSeek Chat** to your Desktop and Start menu, and the `deepseek-chat` command to new terminals. After that, the same commands as on the Mac work: `deepseek-chat`, `deepseek-chat start`, `status`, `stop`, `restart`, `logs`. The app opens in its own Chrome or Edge window.
+
+- **Keys** are saved encrypted with your Windows login (Windows' equivalent of the Keychain). Paste them in **Settings**.
+- **Choose folder…** and **Save** use Windows' own dialogs.
+- The `security …` Keychain commands in section 3 are Mac-only. On Windows, manage keys in **Settings**.
+
 ## 3. API keys
 
 Keys are stored in the **macOS Keychain**, never in a file. The easiest way: in the app, open **Settings** (bottom-left) and paste the key.

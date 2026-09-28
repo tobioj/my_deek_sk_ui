@@ -20,7 +20,8 @@ export function ownFolders(chat: Pick<Chat, "folders" | "workspace"> | null | un
   return chat.folders ?? (chat.workspace ? [chat.workspace] : []);
 }
 
-const baseName = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
+// A folder's own name from its full path, on macOS (/) or Windows (\).
+export const baseName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
 // Short, unique names: "api", "web", and "api-2" if two folders are both called "api".
 export function folderNames(paths: string[]): string[] {

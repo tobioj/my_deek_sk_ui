@@ -11,6 +11,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 const CHATS_DIR = path.join(DATA_DIR, "chats");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 export const BACKUPS_DIR = path.join(DATA_DIR, "backups");
+export const SECRETS_DIR = path.join(DATA_DIR, "secrets"); // Windows: keys encrypted with your Windows login
 const PROJECTS_DIR = path.join(DATA_DIR, "projects");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 

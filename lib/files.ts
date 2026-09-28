@@ -13,7 +13,7 @@ const MAX_SCAN_FILES = 5000;
 export function expandHome(p: string): string {
   const trimmed = p.trim().replace(/^["']|["']$/g, "");
   if (trimmed === "~") return os.homedir();
-  if (trimmed.startsWith("~/")) return path.join(os.homedir(), trimmed.slice(2));
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return path.join(os.homedir(), trimmed.slice(2));
   return trimmed;
 }
 

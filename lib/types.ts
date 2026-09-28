@@ -188,7 +188,7 @@ export interface Settings {
 
 export interface KeyStatus {
   configured: boolean;
-  source: "env" | "keychain" | "settings" | null;
+  source: "env" | "keychain" | "windows" | "settings" | null;
   hint: string | null; // last 4 characters only
 }
 

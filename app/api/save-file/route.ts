@@ -1,38 +1,21 @@
 // POST /api/save-file — { content, name?, mode: "new" | "append" }
-// Opens the Mac's own Save / Open dialog so *you* choose where a reply goes, then writes it.
-import { execFile } from "node:child_process";
+// Opens the computer's own Save / Open dialog (macOS or Windows) so *you* choose where a
+// reply goes, then writes it.
 import fs from "node:fs/promises";
 import os from "node:os";
+import { chooseExistingFile, chooseSaveFile, hasNativeDialogs } from "@/lib/native";
 import { isBinaryName } from "@/lib/skip";
-
-const esc = (s: string) => s.replace(/[\\"]/g, "\\$&");
-
-function pick(lines: string[]): Promise<{ path?: string; cancelled?: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    execFile("osascript", lines.flatMap((l) => ["-e", l]), { timeout: 10 * 60 * 1000 }, (err, stdout, stderr) => {
-      if (err) {
-        if (/-128/.test(stderr) || /User canceled/i.test(stderr)) return resolve({ cancelled: true });
-        return resolve({ error: stderr.trim() || err.message });
-      }
-      resolve({ path: stdout.trim() });
-    });
-  });
-}
 
 export async function POST(req: Request) {
   const { content, name, mode } = (await req.json().catch(() => ({}))) as { content?: string; name?: string; mode?: string };
   if (typeof content !== "string" || !content.trim()) return Response.json({ error: "Nothing to save" }, { status: 400 });
-  if (process.platform !== "darwin") return Response.json({ error: "The save dialog is only available on macOS", fallback: true }, { status: 400 });
+  if (!hasNativeDialogs) return Response.json({ error: "The save dialog is only available on macOS and Windows", fallback: true }, { status: 400 });
 
-  const fileName = (name || "DeepSeek reply.md").replace(/[/:]/g, "-").slice(0, 120);
+  const fileName = (name || "DeepSeek reply.md").replace(/[/:\\*?"<>|]/g, "-").slice(0, 120);
   const picked =
     mode === "append"
-      ? await pick(["activate", 'set f to choose file with prompt "Add this reply to the end of which file?" default location (path to documents folder)', "POSIX path of f"])
-      : await pick([
-          "activate",
-          `set f to choose file name with prompt "Save this reply as" default name "${esc(fileName)}" default location (path to documents folder)`,
-          "POSIX path of f",
-        ]);
+      ? await chooseExistingFile("Add this reply to the end of which file?")
+      : await chooseSaveFile("Save this reply as", fileName);
   if (picked.cancelled) return Response.json({ cancelled: true });
   if (!picked.path) return Response.json({ error: picked.error ?? "Couldn't open the dialog" }, { status: 500 });
 

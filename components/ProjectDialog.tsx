@@ -6,7 +6,7 @@ import { nanoid } from "nanoid";
 import { useState } from "react";
 import { api, fileToAttachment } from "@/lib/client";
 import { formatTokens } from "@/lib/tokens";
-import { projectFolders } from "@/lib/folders";
+import { baseName, projectFolders } from "@/lib/folders";
 import type { Project, ProjectFile } from "@/lib/types";
 import { Button, Modal } from "./ui";
 
@@ -194,7 +194,7 @@ function ProjectForm({ project, allowedRepos, defaultDocsFolder, onClose, onSave
               {folders.map((f) => (
                 <div key={f} className="flex items-center gap-2 px-3 py-2 text-[13px]">
                   <FolderOpen size={14} className="shrink-0 text-accent" />
-                  <span className="shrink-0 font-medium">{f.split("/").pop()}</span>
+                  <span className="shrink-0 font-medium">{baseName(f)}</span>
                   <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-faint" title={f}>
                     {f}
                   </span>

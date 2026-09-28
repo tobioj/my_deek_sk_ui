@@ -16,6 +16,7 @@ export function applyTheme(theme: Theme) {
 
 const SOURCE_LABEL: Record<NonNullable<KeyStatus["source"]>, string> = {
   keychain: "saved in your macOS Keychain",
+  windows: "saved encrypted with your Windows login",
   env: "from .env.local (DEEPSEEK_API_KEY)",
   settings: "saved in data/settings.json",
 };
@@ -147,7 +148,7 @@ function SettingsForm({ open, onClose, settings, keyStatus, searchKey, githubKey
                 computer and is never sent to the browser.
               </>
             ) : (
-              <>No key yet. Get one at platform.deepseek.com → API keys. It&apos;s stored in your macOS Keychain.</>
+              <>No key yet. Get one at platform.deepseek.com → API keys. It&apos;s stored securely on this computer.</>
             )}
           </p>
           <div className="flex gap-2">

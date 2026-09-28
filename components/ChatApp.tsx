@@ -22,7 +22,7 @@ import type {
   UserMessage,
 } from "@/lib/types";
 import { isEditingMode } from "@/lib/types";
-import { linkedFolders, ownFolders, projectFolders } from "@/lib/folders";
+import { baseName, linkedFolders, ownFolders, projectFolders } from "@/lib/folders";
 import { Composer } from "./Composer";
 import { FolderDialog, rememberFolder, type DroppedFolder } from "./FolderDialog";
 import { AssistantBlock, UserBubble } from "./Message";
@@ -632,7 +632,7 @@ export function ChatApp() {
     } catch (e) {
       const msg = (e as Error).message;
       if (mode === "new" && /only available on macOS/.test(msg)) {
-        // Not a Mac: download the file through the browser instead.
+        // No file dialog on this system: download the file through the browser instead.
         const link = document.createElement("a");
         link.href = URL.createObjectURL(new Blob([content], { type: "text/markdown" }));
         link.download = name;
@@ -951,7 +951,7 @@ export function ChatApp() {
                   {project.files.length > 0 && ` · ${project.files.length} file${project.files.length === 1 ? "" : "s"}`}
                   {projectFolders(project).length > 0 &&
                     ` · ${projectFolders(project)
-                      .map((f) => f.split("/").pop())
+                      .map((f) => baseName(f))
                       .join(", ")}`}
                 </button>
               </div>
@@ -986,7 +986,7 @@ export function ChatApp() {
             {keyMissing && (
               <div className="mt-8 flex max-w-lg items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-[13.5px]">
                 <KeyRound size={18} className="shrink-0 text-accent" />
-                <span className="flex-1 text-muted">Add your DeepSeek API key to start chatting. It&apos;s stored in your Mac&apos;s Keychain.</span>
+                <span className="flex-1 text-muted">Add your DeepSeek API key to start chatting. It&apos;s stored securely on this computer.</span>
                 <Button variant="primary" onClick={() => setSettingsOpen(true)}>
                   Add key
                 </Button>
