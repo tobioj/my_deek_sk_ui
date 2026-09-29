@@ -20,3 +20,17 @@ export function repoList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((r): r is string => typeof r === "string" && /^[\w.-]+\/[\w.-]+$/.test(r)))].slice(0, 100);
 }
+
+// Terminal settings: a switch, internet, the time limit, and "Always allow" commands.
+export function terminalFields(body: Record<string, unknown>) {
+  const out: { terminal?: boolean; terminalInternet?: boolean; terminalMinutes?: number; allowedCommands?: string[] } = {};
+  if (typeof body.terminal === "boolean") out.terminal = body.terminal;
+  if (typeof body.terminalInternet === "boolean") out.terminalInternet = body.terminalInternet;
+  if (typeof body.terminalMinutes === "number" && [10, 30, 60].includes(body.terminalMinutes)) out.terminalMinutes = body.terminalMinutes;
+  if (Array.isArray(body.allowedCommands)) {
+    out.allowedCommands = [...new Set(body.allowedCommands.filter((c): c is string => typeof c === "string").map((c) => c.trim()).filter(Boolean))]
+      .map((c) => c.slice(0, 500))
+      .slice(0, 200);
+  }
+  return out;
+}

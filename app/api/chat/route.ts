@@ -9,15 +9,38 @@ import { chatLinkedFolders } from "@/lib/folders";
 import { resolveRoots, type Root } from "@/lib/roots";
 import path from "node:path";
 import { fileBlock, truncateText } from "@/lib/skip";
-import { waitForApproval, type Decision } from "@/lib/approvals";
+import { takeEditedCommand, waitForApproval, type Decision } from "@/lib/approvals";
 import { applyEdit, describe, EDIT_TOOL_NAMES, EDIT_TOOLS, isEditError, previewEdit } from "@/lib/edits";
-import { allowDocAutoSave, getChat, getProject, getSettings, saveUpload, updateChat } from "@/lib/storage";
+import { allowDocAutoSave, allowProjectCommand, getChat, getProject, getSettings, saveUpload, updateChat } from "@/lib/storage";
 import { DOC_TOOL_NAMES, DOC_TOOLS, docEdit, docsFolderPath, docsRoot, runDocReadTool } from "@/lib/docs";
 import { GITHUB_TOOL_NAMES, GITHUB_TOOLS, reposFor, runGithubTool } from "@/lib/github";
 import { costOf } from "@/lib/tokens";
+import {
+  appPortsFor,
+  approvalNeeded,
+  COMMAND_TOOL_NAMES,
+  COMMAND_TOOLS,
+  commandTool,
+  executeCommand,
+  prepareCommand,
+  recheck,
+  terminalAccess,
+  type Prepared,
+} from "@/lib/terminal";
 import { runTool, WORKSPACE_TOOLS } from "@/lib/tools";
 import { runWebTool, WEB_TOOL_NAMES, WEB_TOOLS } from "@/lib/websearch";
-import { isEditingMode, type AssistantMessage, type AssistantStep, type Attachment, type DiffPreview, type Mode, type StreamEvent, type ToolCall, type UserMessage } from "@/lib/types";
+import {
+  isEditingMode,
+  type AssistantMessage,
+  type AssistantStep,
+  type Attachment,
+  type CommandRun,
+  type DiffPreview,
+  type Mode,
+  type StreamEvent,
+  type ToolCall,
+  type UserMessage,
+} from "@/lib/types";
 
 const MAX_TOOL_ROUNDS = 80;
 
@@ -26,6 +49,26 @@ interface Outcome {
   summary: string;
   ok: boolean;
   sources?: ToolCall["sources"];
+}
+
+// Short line for a command's result, e.g. in the notes DeepSeek sees about earlier replies.
+function commandSummary(r: CommandRun): string {
+  switch (r.status) {
+    case "finished":
+      return `Ran ${r.command}`;
+    case "running":
+      return `Started ${r.command} in the background`;
+    case "timed_out":
+      return `${r.command} hit the time limit`;
+    case "stopped":
+      return `Stopped ${r.command}`;
+    case "denied":
+      return `Didn't run ${r.command}`;
+    case "blocked":
+      return `Blocked ${r.command}`;
+    default:
+      return `${r.command} failed${r.exitCode != null ? ` (exit ${r.exitCode})` : ""}`;
+  }
 }
 
 interface Body {
@@ -151,15 +194,79 @@ export async function POST(req: Request) {
         // GitHub (read-only): the chat's toggle, a token, and repos allowed for this chat.
         const repos = reposFor(settings, project);
         const github = !!chat.github && repos.length > 0 && !!(await getSecret("github")).key;
+        // Terminal: only in a project with Terminal on, and only in that project's folders.
+        const terminal = terminalAccess(project, roots, appPortsFor(req));
         const tools = [
           ...(root ? WORKSPACE_TOOLS : []),
           ...(root && editing ? EDIT_TOOLS : []),
           ...(docsPath ? DOC_TOOLS : []),
           ...(web ? WEB_TOOLS : []),
           ...(github ? GITHUB_TOOLS : []),
+          ...(terminal ? COMMAND_TOOLS : []),
         ];
         const useTools = tools.length > 0;
-        const messages = await buildMessages(chat, settings, { roots, web, mode, docs: docsPath, github: github ? repos : [] }, project);
+        const messages = await buildMessages(chat, settings, { roots, web, mode, docs: docsPath, github: github ? repos : [], terminal }, project);
+
+        // Run one command DeepSeek asked for (after approval, if it needed one), streaming its output.
+        const runCommandJob = async (call: ToolCall, prep: Prepared, decision: Decision | undefined): Promise<Outcome> => {
+          call.status = undefined; // commands keep their own status in call.command
+          let run = prep.run;
+          if (decision === "reject") {
+            call.command = { ...run, status: "denied" };
+            send({ type: "command", id: call.id, command: call.command });
+            return {
+              result: "The user chose not to run this command. Don't run it again as-is; ask what they'd prefer if it's unclear.",
+              summary: commandSummary(call.command),
+              ok: false,
+            };
+          }
+          const edited = takeEditedCommand(chat.id, call.id);
+          if (edited && edited !== run.command) {
+            run = recheck(run, edited, terminal!);
+            if (run.level === "blocked") {
+              call.command = run;
+              send({ type: "command", id: call.id, command: run });
+              return { result: `The user edited the command to \`${edited}\`, but that's blocked: ${run.reason}.`, summary: commandSummary(run), ok: false };
+            }
+          }
+          if (decision === "approve_remember" && run.rule && !run.edited) await allowProjectCommand(terminal!.project.id, run.rule);
+          // Batch output into a few events a second, however fast the command prints.
+          let pendingOut = "";
+          let flushTimer: ReturnType<typeof setTimeout> | null = null;
+          const flush = () => {
+            flushTimer = null;
+            if (pendingOut) send({ type: "command_output", id: call.id, chunk: pendingOut });
+            pendingOut = "";
+          };
+          const ping = setInterval(() => send({ type: "ping" }), 15_000);
+          try {
+            const done = await executeCommand({
+              access: terminal!,
+              root: prep.root,
+              run,
+              chatId: chat.id,
+              by: "deepseek",
+              signal: abort.signal,
+              onStart: (procId) => {
+                call.command = { ...run, status: "running", procId };
+                send({ type: "command", id: call.id, command: call.command });
+              },
+              onOutput: (chunk) => {
+                pendingOut += chunk;
+                flushTimer ??= setTimeout(flush, 150);
+              },
+            });
+            if (flushTimer) clearTimeout(flushTimer);
+            flush();
+            call.command = done.run;
+            send({ type: "command", id: call.id, command: done.run });
+            const note = done.run.edited ? `The user changed the command before running it. What ran: ${done.run.command}\n\n` : "";
+            const ok = done.run.status === "finished" || (done.run.status === "running" && !!done.run.background);
+            return { result: note + done.result, summary: commandSummary(done.run), ok };
+          } finally {
+            clearInterval(ping);
+          }
+        };
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           const step: AssistantStep = { content: "" };
@@ -245,9 +352,10 @@ export async function POST(req: Request) {
             messages.push(assistantMsg as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
 
             // Reading tools (folders, docs, web, GitHub) run right away, in parallel.
-            // File changes (code edits and doc saves) are collected as jobs for approval.
+            // File changes (code edits and doc saves) and commands are collected as jobs: they may
+            // need approval, and run one at a time, in order.
             const outcomes: Outcome[] = new Array(toolCalls.length);
-            const jobs: { i: number; tool: string; args: string; roots: Root[]; doc: boolean }[] = [];
+            const jobs: { i: number; tool: string; args: string; roots: Root[]; doc: boolean; command?: Prepared }[] = [];
             const off = (summary: string, result: string): Outcome => ({ result: `Error: ${result}`, summary, ok: false });
             await Promise.all(
               toolCalls.map(async (c, i) => {
@@ -270,6 +378,23 @@ export async function POST(req: Request) {
                   outcomes[i] = github ? await runGithubTool(c.name, c.args, repos) : off("GitHub is off", "GitHub isn't turned on for this chat.");
                 } else if (WEB_TOOL_NAMES.has(c.name)) {
                   outcomes[i] = web ? await runWebTool(c.name, c.args, abort.signal) : off("Web search is off", "web search is turned off");
+                } else if (COMMAND_TOOL_NAMES.has(c.name)) {
+                  if (!terminal) {
+                    outcomes[i] = off(
+                      "Terminal is off",
+                      "the terminal is off here. Commands need a project with Terminal switched on in its settings, and one of its folders linked to this chat.",
+                    );
+                  } else if (c.name === "run_command") {
+                    const prep = prepareCommand(c.args, terminal, mode);
+                    if ("error" in prep) outcomes[i] = off(prep.error, prep.error);
+                    else {
+                      c.command = prep.run;
+                      send({ type: "command", id: c.id, command: prep.run });
+                      if (prep.run.status === "blocked") {
+                        outcomes[i] = { result: `Blocked: ${prep.run.reason}. This command can't run here; don't try to get around it.`, summary: commandSummary(prep.run), ok: false };
+                      } else jobs.push({ i, tool: c.name, args: c.args, roots: [prep.root], doc: false, command: prep });
+                    }
+                  } else outcomes[i] = await commandTool(c.name, c.args, terminal);
                 } else {
                   outcomes[i] = root ? await runTool(c.name, c.args, roots) : off("No folder open", "no folder is open");
                 }
@@ -280,6 +405,7 @@ export async function POST(req: Request) {
             jobs.sort((a, b) => a.i - b.i);
             const previews = new Map<number, DiffPreview>();
             for (const job of jobs) {
+              if (job.command) continue; // commands have no preview
               const call = toolCalls[job.i];
               try {
                 call.diff = { ...(await previewEdit(job.roots, job.tool, job.args)), ...(job.doc ? { doc: true } : {}) };
@@ -290,24 +416,38 @@ export async function POST(req: Request) {
                 send({ type: "tool_result", id: call.id, summary: msg, ok: false }); // show it now, not after approvals
               }
             }
-            const ready = jobs.filter((j) => previews.has(j.i));
+            const ready = jobs.filter((j) => j.command || previews.has(j.i));
             if (ready.length) {
               const decisions = new Map<number, Decision>();
-              // Auto mode never asks. Docs marked "save without asking" don't either.
-              // (Re-read: "Switch to Auto" or "don't ask again" can happen mid-reply.)
-              const [latest, latestSettings] = await Promise.all([getChat(chat.id), getSettings()]);
+              // Auto mode never asks about file changes. Docs marked "save without asking" don't either.
+              // Commands follow their own rules (look-only, Always allow, always-ask, Windows).
+              // (Re-read: "Switch to Auto", "don't ask again" or "Always allow" can happen mid-reply.)
+              const [latest, latestSettings, latestProject] = await Promise.all([
+                getChat(chat.id),
+                getSettings(),
+                terminal ? getProject(terminal.project.id) : Promise.resolve(null),
+              ]);
               const autoCode = mode === "auto" || latest?.mode === "auto" || !!latest?.autoApprove;
+              const commandMode: Mode = autoCode && isEditingMode(mode) ? "auto" : mode;
+              const rules = latestProject?.allowedCommands ?? [];
               const docAbs = (j: (typeof jobs)[number]) => path.join(j.roots[0].abs, previews.get(j.i)!.path);
-              const needsAsk = ready.filter((j) => !(autoCode || (j.doc && latestSettings.docsAutoSave.includes(docAbs(j)))));
+              const needsAsk = ready.filter((j) =>
+                j.command
+                  ? approvalNeeded(j.command.run, terminal!, commandMode, rules)
+                  : !(autoCode || (j.doc && latestSettings.docsAutoSave.includes(docAbs(j)))),
+              );
               for (const j of ready) if (!needsAsk.includes(j)) decisions.set(j.i, "approve");
               if (needsAsk.length) {
                 for (const j of needsAsk) {
                   toolCalls[j.i].status = "pending";
-                  send({ type: "approval", id: toolCalls[j.i].id, diff: previews.get(j.i)! });
+                  if (j.command) send({ type: "approval", id: toolCalls[j.i].id, command: j.command.run });
+                  else send({ type: "approval", id: toolCalls[j.i].id, diff: previews.get(j.i)! });
                 }
                 const ping = setInterval(() => send({ type: "ping" }), 15_000);
                 try {
-                  const results = await Promise.all(needsAsk.map((j) => waitForApproval(chat.id, toolCalls[j.i].id, abort.signal)));
+                  const results = await Promise.all(
+                    needsAsk.map((j) => waitForApproval(chat.id, toolCalls[j.i].id, abort.signal, j.command ? "command" : "edit")),
+                  );
                   needsAsk.forEach((j, k) => decisions.set(j.i, results[k]));
                 } finally {
                   clearInterval(ping);
@@ -316,6 +456,11 @@ export async function POST(req: Request) {
               for (const j of ready) {
                 const call = toolCalls[j.i];
                 const decision = decisions.get(j.i);
+                if (j.command) {
+                  if (abort.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+                  outcomes[j.i] = await runCommandJob(call, j.command, decision);
+                  continue;
+                }
                 if (decision === "reject") {
                   call.status = "rejected";
                   outcomes[j.i] = {

@@ -1,8 +1,8 @@
 # deepseek-chat (Windows): start the DeepSeek chat app if it isn't running, and open it in its own window.
 #   deepseek-chat           open the app
 #   deepseek-chat start     start the background server without opening a window
-#   deepseek-chat status    show whether the server is running
-#   deepseek-chat stop      stop the background server
+#   deepseek-chat status    show whether the server is running, and any running commands
+#   deepseek-chat stop      stop the background server (and every command it started)
 #   deepseek-chat restart   restart it (rebuilds if the code changed)
 #   deepseek-chat logs      follow the server log (Ctrl+C to stop)
 param([string]$Command = "open")
@@ -35,6 +35,25 @@ function Stop-Server {
   return $true
 }
 
+# Commands started by DeepSeek or Run that are still running.
+function Get-RunningCommands {
+  try { return (Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "$Url/api/processes?format=text").Content.Trim() } catch { return "" }
+}
+
+# Stop them through the app, so it can check they're really gone.
+function Stop-Commands {
+  $list = Get-RunningCommands
+  if (-not $list) { return }
+  Write-Host "Stopping running commands:"
+  $list -split "`n" | ForEach-Object { Write-Host "  $_" }
+  try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Method Post -ContentType "application/json" -Body '{"action":"stop_all"}' "$Url/api/processes" | Out-Null } catch {}
+  $left = Get-RunningCommands
+  if ($left) {
+    Write-Host "Still running (stopping the app ends these too):"
+    $left -split "`n" | ForEach-Object { Write-Host "  $_" }
+  }
+}
+
 function Stop-WithError([string]$Message) {
   Write-Host $Message -ForegroundColor Red
   if ($Host.Name -eq "ConsoleHost") { Read-Host "Press Enter to close" | Out-Null }
@@ -43,14 +62,22 @@ function Stop-WithError([string]$Message) {
 
 switch ($Command) {
   "status" {
-    if (Test-Up) { Write-Host "Running at $Url (pid $(Get-ServerProcessId))" } else { Write-Host "Not running. Start it with: deepseek-chat" }
+    if (Test-Up) {
+      Write-Host "Running at $Url (pid $(Get-ServerProcessId))"
+      $list = Get-RunningCommands
+      if ($list) {
+        Write-Host "Running commands (stop them in the app's Running list, or with: deepseek-chat stop):"
+        $list -split "`n" | ForEach-Object { Write-Host "  $_" }
+      } else { Write-Host "No commands running." }
+    } else { Write-Host "Not running. Start it with: deepseek-chat" }
     exit 0
   }
   "stop" {
+    if (Test-Up) { Stop-Commands }
     if (Stop-Server) { Write-Host "Stopped." } else { Write-Host "Not running." }
     exit 0
   }
-  "restart" { Stop-Server | Out-Null; Start-Sleep -Seconds 1 }
+  "restart" { if (Test-Up) { Stop-Commands }; Stop-Server | Out-Null; Start-Sleep -Seconds 1 }
   "logs" {
     if (-not (Test-Path $Log)) { Write-Host "No log yet." ; exit 0 }
     Get-Content -Path $Log -Wait -Tail 50
@@ -72,7 +99,7 @@ if (-not (Test-Up)) {
   $needsBuild = -not (Test-Path $buildId)
   if (-not $needsBuild) {
     $built = (Get-Item $buildId).LastWriteTime
-    $sources = @("app", "components", "lib", "proxy.ts", "next.config.ts", "package.json") | ForEach-Object { Join-Path $AppDir $_ }
+    $sources = @("app", "components", "lib", "proxy.ts", "instrumentation.ts", "next.config.ts", "package.json") | ForEach-Object { Join-Path $AppDir $_ }
     $newer = Get-ChildItem -Path $sources -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $built } | Select-Object -First 1
     $needsBuild = [bool]$newer
   }

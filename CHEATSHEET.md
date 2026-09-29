@@ -9,8 +9,8 @@ Everything you need, in one place. Type the commands in **Terminal**.
 | I want to… | Do this |
 |---|---|
 | Open the app | Spotlight (⌘ Space) → **DeepSeek Chat**, or run `deepseek-chat` |
-| Close the window | Red button or ⌘ Q. **The server keeps running in the background**, so the app reopens instantly. That's normal and harmless (about 58 MB of memory, no CPU while idle). |
-| Shut everything down | `deepseek-chat stop` (restarting your Mac also stops it) |
+| Close the window | Red button or ⌘ Q. **The server keeps running in the background**, so the app reopens instantly. That's normal and harmless (about 58 MB of memory, no CPU while idle). Commands that are running (like a dev server) keep running too: reopen the app and stop them from the **Running** list. |
+| Shut everything down | `deepseek-chat stop` (restarting your Mac also stops it). This also stops every command the app started. |
 
 ## 2. Server commands
 
@@ -18,8 +18,8 @@ Everything you need, in one place. Type the commands in **Terminal**.
 |---|---|
 | `deepseek-chat` | Starts the server if needed, then opens the app window |
 | `deepseek-chat start` | Starts the server only, without opening a window |
-| `deepseek-chat status` | Shows whether the server is running |
-| `deepseek-chat stop` | Stops the server |
+| `deepseek-chat status` | Shows whether the server is running, and lists any commands still running |
+| `deepseek-chat stop` | Stops every running command, then the server |
 | `deepseek-chat restart` | Stops, rebuilds if the code changed, and starts again. Use it after code changes or if something acts weird. |
 | `deepseek-chat logs` | Shows the server log live (press Ctrl + C to exit) |
 
@@ -39,6 +39,7 @@ This adds **DeepSeek Chat** to your Desktop and Start menu, and the `deepseek-ch
 - **Keys** are saved encrypted with your Windows login (Windows' equivalent of the Keychain). Paste them in **Settings**.
 - **Choose folder…** and **Save** use Windows' own dialogs.
 - The `security …` Keychain commands in section 3 are Mac-only. On Windows, manage keys in **Settings**.
+- **Terminal** works the same, except Windows has no sandbox: look-only commands (`dir`, `git status`…) run straight away, and **every other command asks you first, even in Auto mode**. The Internet switch is greyed out because it can't be enforced. Commands run in PowerShell.
 
 ## 3. API keys
 
@@ -100,6 +101,25 @@ security delete-generic-password -s github-token` |
 - Turn the **GitHub** button on in a chat when you want it. It's off by default.
 - DeepSeek can read code, issues, PRs, commits and CI, and can't change anything on GitHub.
 
+**Terminal** (Project settings → Terminal; off by default)
+- DeepSeek can **run commands** (tests, builds, installs, dev servers) in the **project's folders**. Chats outside a project never get it, and folders a chat adds on its own don't count.
+- **Code blocks** in replies get a **▶ Run** button: it runs the command right there and shows the output. It costs nothing (DeepSeek isn't involved). **Send to DeepSeek** puts the output in your message if you want help with it.
+- On the Mac, commands run in a **sandbox**: they can only change files in the project folders, can't read your SSH keys, logins, Keychain or this app's data, and can't open or control other apps.
+- **Internet for commands** is off by default. Turn it on in Project settings for `npm install`, `pip install`, `git pull`.
+- **GitHub stays read-only:** `git push` and the `gh` command never run, and git logins are hidden from commands. Push from your own terminal.
+
+| Kind of command | What happens |
+|---|---|
+| Look-only (`ls`, `cat`, `grep`, `git status/diff/log`…) | Runs straight away, in every mode |
+| Most commands (`npm test`, `npm run build`…) | **Asks first** in Ask, Plan and Edit. Runs without asking in **Auto** (Mac). Click **Always allow** on the card to stop asking for that command in this project; remove it in Project settings. |
+| Risky (deleting folders, `git reset --hard`, publishing, anything touching `.env`) | Always asks, even in Auto |
+| Never (`sudo`, `git push`, `gh`, `curl … \| sh`, running things in the background with `&`) | Refused, even if you approve |
+
+- On the approval card: **Run**, **Don't run**, **Edit** (change the command first) or **Always allow**. What a command changes can't be undone with **Undo**, so keep your project in Git.
+- In **Ask** and **Plan** mode, commands can only look: on the Mac even the project folder is read-only to them.
+- **Time limit:** 10 minutes per command by default (30 or 60 in Project settings). If a command is stopped, DeepSeek still gets the output so far.
+- **Running list:** the **● running** button at the top right shows every command still running, from any chat, with its log, its port (e.g. localhost:3000) and a **Stop** button. Stop ends the command and everything it started, and only says *Stopped* once the system confirms they're gone. Dev servers DeepSeek starts run in the background and show up here.
+
 **Folder modes** (appear next to the model picker once a folder is open)
 
 | Mode | What DeepSeek can do |
@@ -114,7 +134,7 @@ security delete-generic-password -s github-token` |
 In Edit mode:
 - **Approve all** approves everything currently waiting. **Switch to Auto** approves them and stops asking in this chat. Click **Edit** to go back to approving each change.
 - **Undo changes** under a reply puts every file it touched back the way it was. If you edited one of those files afterwards, it asks before overwriting your edit.
-- It never touches `.env`/secret files, `.git`, `node_modules`, or anything outside the folder, and it can't run Terminal commands.
+- It never touches `.env`/secret files, `.git`, `node_modules`, or anything outside the folder. Running commands is separate: see **Terminal** above.
 - If the folder has uncommitted Git changes, you'll see a warning. Committing first makes DeepSeek's edits easy to review.
 
 **Projects** (the **Projects** section of the sidebar)
@@ -150,7 +170,7 @@ In Edit mode:
 
 ## 5. The `deepseek` Terminal command (separate tool, optional)
 
-This is **not** the app. It's Claude Code (a text-only coding assistant that runs in Terminal) with DeepSeek plugged in. Unlike the app, it can **edit files and run commands**. It uses no Claude models and Anthropic bills nothing.
+This is **not** the app. It's Claude Code (a text-only coding assistant that runs in Terminal) with DeepSeek plugged in. It can edit files and run commands in any folder you start it in, without the app's sandbox. It uses no Claude models and Anthropic bills nothing.
 
 | I want to… | Do this |
 |---|---|
@@ -172,6 +192,11 @@ This is **not** the app. It's Claude Code (a text-only coding assistant that run
 | Search button does nothing | Settings → Web search → add your Tavily key |
 | DeepSeek made a change you don't want | Click **Undo changes** under that reply |
 | Ask / Plan / Edit / Auto buttons missing | They only show when a folder is open: **+ → Add a folder…** |
+| DeepSeek says it can't edit files | Switch the chat to **Edit** or **Auto**. It's told about the switch in your next message. |
+| No ▶ Run buttons, or DeepSeek can't run commands | The chat must be in a project with **Project settings → Terminal** on, and a project folder switched on in the chat |
+| `npm install` / `git pull` fails in a command | **Project settings → Terminal → Internet for commands** (Mac) |
+| A command says "not permitted" | The sandbox stopped it from going outside the project folders. That's intended. |
+| Something keeps running after I closed the window | Reopen the app → **● running** (top right) → **Stop**, or `deepseek-chat stop` |
 | App doesn't show in Spotlight | `mdimport ~/Applications/"DeepSeek Chat.app"` |
 | Want to see what went wrong | `deepseek-chat logs` |
 

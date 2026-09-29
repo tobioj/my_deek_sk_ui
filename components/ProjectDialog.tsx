@@ -1,19 +1,21 @@
 "use client";
-// Create or edit a project: a name, shared context every chat sees, shared files,
-// and an optional folder new chats start with.
-import { AlertTriangle, FileText, FolderOpen, Loader2, Paperclip, Trash2, X } from "lucide-react";
+// Create or edit a project: a name, shared context every chat sees, shared files, folders,
+// and whether DeepSeek may run commands in them (Terminal).
+import { AlertTriangle, FileText, FolderOpen, Loader2, Paperclip, Plus, Trash2, X } from "lucide-react";
 import { nanoid } from "nanoid";
 import { useState } from "react";
 import { api, fileToAttachment } from "@/lib/client";
 import { formatTokens } from "@/lib/tokens";
 import { baseName, projectFolders } from "@/lib/folders";
+import type { Platform } from "@/lib/commands";
 import type { Project, ProjectFile } from "@/lib/types";
-import { Button, Modal } from "./ui";
+import { Button, Modal, Segmented, Switch } from "./ui";
 
 interface Props {
   open: boolean;
   project: Project | null; // null = creating a new project
   allowedRepos: string[]; // GitHub allowlist from Settings
+  platform: Platform; // macOS gets the sandbox; Windows asks before every command
   defaultDocsFolder: string; // Docs folder from Settings
   onClose: () => void;
   onSaved: (p: Project) => void;
@@ -25,7 +27,7 @@ export function ProjectDialog(props: Props) {
   return <ProjectForm key={props.project?.id ?? "new"} {...props} />;
 }
 
-function ProjectForm({ project, allowedRepos, defaultDocsFolder, onClose, onSaved, onDelete }: Props) {
+function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClose, onSaved, onDelete }: Props) {
   const [name, setName] = useState(project?.name ?? "");
   const [context, setContext] = useState(project?.context ?? "");
   const [folders, setFolders] = useState<string[]>(projectFolders(project));
@@ -35,6 +37,16 @@ function ProjectForm({ project, allowedRepos, defaultDocsFolder, onClose, onSave
   const [isolated, setIsolated] = useState(project?.isolated ?? false);
   const [docsFolder, setDocsFolder] = useState(project?.docsFolder ?? "");
   const [repos, setRepos] = useState<string[]>(project?.githubRepos ?? []);
+  const [terminal, setTerminal] = useState(project?.terminal ?? false);
+  const [internet, setInternet] = useState(project?.terminalInternet ?? false);
+  const [minutes, setMinutes] = useState(String(project?.terminalMinutes ?? 10));
+  const [allowed, setAllowed] = useState<string[]>(project?.allowedCommands ?? []);
+  const [ruleInput, setRuleInput] = useState("");
+  const addRule = () => {
+    const r = ruleInput.trim();
+    if (r && !allowed.includes(r)) setAllowed((prev) => [...prev, r]);
+    setRuleInput("");
+  };
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -75,7 +87,19 @@ function ProjectForm({ project, allowedRepos, defaultDocsFolder, onClose, onSave
     setBusy("save");
     setError(null);
     try {
-      const body = { name: name.trim() || "Untitled project", context, folders, files, isolated, docsFolder: docsFolder.trim() || null, githubRepos: repos };
+      const body = {
+        name: name.trim() || "Untitled project",
+        context,
+        folders,
+        files,
+        isolated,
+        docsFolder: docsFolder.trim() || null,
+        githubRepos: repos,
+        terminal,
+        terminalInternet: internet,
+        terminalMinutes: Number(minutes),
+        allowedCommands: allowed,
+      };
       const saved = project
         ? await api<Project>(`/api/projects/${project.id}`, { method: "PATCH", json: body })
         : await api<Project>("/api/projects", { method: "POST", json: body });
@@ -229,6 +253,91 @@ function ProjectForm({ project, allowedRepos, defaultDocsFolder, onClose, onSave
               className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-app px-3 font-mono text-[12.5px] outline-none focus:border-line-strong"
             />
           </div>
+        </div>
+
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-3">
+            <span className="text-[13px] font-medium">Terminal</span>
+            <Switch checked={terminal} onChange={setTerminal} label="Let DeepSeek run commands in this project's folders" disabled={!folders.length} />
+          </div>
+          <span className="block text-xs text-muted">
+            {!folders.length
+              ? "Add a folder above first: commands only ever run in this project's folders."
+              : platform === "mac"
+                ? "Let DeepSeek run commands in this project's folders, in a sandbox: they can only change files in these folders, can't read your SSH keys, logins or Keychain, and can't push to GitHub. Look-only commands (ls, git status…) run straight away; others ask first, except in Auto mode."
+                : "Let DeepSeek run commands in this project's folders. Windows has no sandbox, so every command except look-only ones (dir, git status…) asks you first, even in Auto mode. Nothing can push to GitHub."}{" "}
+            Code blocks in replies also get a ▶ Run button.
+          </span>
+          {terminal && folders.length > 0 && (
+            <div className="mt-2.5 space-y-3 rounded-lg border border-line bg-app px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[13px]">Internet for commands</div>
+                  <div className="text-[11.5px] text-muted">
+                    {platform === "mac"
+                      ? "Needed for npm install, pip install, git pull. Off means commands can only reach this computer (localhost)."
+                      : "Can't be blocked on Windows without a sandbox: commands you approve can always reach the internet."}
+                  </div>
+                </div>
+                <Switch checked={platform === "mac" ? internet : true} onChange={setInternet} label="Internet for commands" disabled={platform !== "mac"} />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[13px]">Time limit</div>
+                  <div className="text-[11.5px] text-muted">For each command DeepSeek runs. Background servers and your ▶ Run commands have no limit.</div>
+                </div>
+                <Segmented
+                  value={minutes}
+                  onChange={setMinutes}
+                  options={[
+                    { value: "10", label: "10 min" },
+                    { value: "30", label: "30 min" },
+                    { value: "60", label: "60 min" },
+                  ]}
+                />
+              </div>
+              <div>
+                <div className="text-[13px]">Always allowed</div>
+                <div className="mb-1.5 text-[11.5px] text-muted">
+                  Commands starting with these run without asking in Edit and Auto mode. Added from a command&apos;s card with &ldquo;Always allow&rdquo;.
+                </div>
+                {allowed.length > 0 && (
+                  <div className="mb-1.5 divide-y divide-line rounded-lg border border-line bg-surface">
+                    {allowed.map((r) => (
+                      <div key={r} className="flex items-center gap-2 px-3 py-1.5">
+                        <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{r}</code>
+                        <button
+                          type="button"
+                          onClick={() => setAllowed((prev) => prev.filter((x) => x !== r))}
+                          className="rounded p-0.5 text-muted hover:text-fg"
+                          aria-label={`Stop always allowing ${r}`}
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    value={ruleInput}
+                    onChange={(e) => setRuleInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addRule();
+                      }
+                    }}
+                    placeholder="e.g. npm test"
+                    className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 font-mono text-[12.5px] outline-none focus:border-line-strong"
+                  />
+                  <Button onClick={addRule} disabled={!ruleInput.trim()}>
+                    <Plus size={13} /> Add
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div>

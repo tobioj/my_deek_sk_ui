@@ -7,7 +7,7 @@ import { nanoid } from "nanoid";
 import { ownFolders, projectFolders } from "./folders";
 import type { Chat, ChatSummary, Project, ProjectSummary, Settings } from "./types";
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
 const CHATS_DIR = path.join(DATA_DIR, "chats");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 export const BACKUPS_DIR = path.join(DATA_DIR, "backups");
@@ -270,7 +270,9 @@ export async function saveProject(project: Project): Promise<void> {
 }
 
 export async function createProject(
-  init: Partial<Pick<Project, "name" | "context" | "folders" | "files" | "isolated" | "docsFolder" | "githubRepos">>,
+  init: Partial<
+    Pick<Project, "name" | "context" | "folders" | "files" | "isolated" | "docsFolder" | "githubRepos" | "terminal" | "terminalInternet" | "terminalMinutes" | "allowedCommands">
+  >,
 ): Promise<Project> {
   const now = new Date().toISOString();
   const project: Project = {
@@ -282,11 +284,26 @@ export async function createProject(
     isolated: init.isolated ?? false,
     docsFolder: init.docsFolder ?? null,
     githubRepos: init.githubRepos ?? [],
+    terminal: init.terminal ?? false,
+    terminalInternet: init.terminalInternet ?? false,
+    terminalMinutes: init.terminalMinutes ?? 10,
+    allowedCommands: init.allowedCommands ?? [],
     createdAt: now,
     updatedAt: now,
   };
   await saveProject(project);
   return project;
+}
+
+// "Always allow" for a command in a project (added from a command's approval card).
+export async function allowProjectCommand(id: string, rule: string): Promise<void> {
+  const project = await getProject(id);
+  if (!project) return;
+  const rules = project.allowedCommands ?? [];
+  if (!rules.includes(rule)) {
+    project.allowedCommands = [...rules, rule].slice(-200);
+    await saveProject(project);
+  }
 }
 
 // Deleting a project keeps its chats; they just move back to the ungrouped list.

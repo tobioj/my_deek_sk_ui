@@ -17,16 +17,20 @@ import type {
   Mode,
   ModelId,
   Project,
+  ProcessInfo,
   ProjectSummary,
   Settings,
   UserMessage,
 } from "@/lib/types";
 import { isEditingMode } from "@/lib/types";
 import { baseName, linkedFolders, ownFolders, projectFolders } from "@/lib/folders";
+import { platformOf, type Platform } from "@/lib/commands";
 import { Composer } from "./Composer";
 import { FolderDialog, rememberFolder, type DroppedFolder } from "./FolderDialog";
+import { RunContext, type RunTarget } from "./Markdown";
 import { AssistantBlock, UserBubble } from "./Message";
 import { ProjectDialog } from "./ProjectDialog";
+import { ProcsContext, RunningButton } from "./RunningList";
 import { SettingsDialog } from "./SettingsDialog";
 import { Logo, Sidebar } from "./Sidebar";
 import { Button, IconButton } from "./ui";
@@ -49,7 +53,7 @@ type Draft = { text: string; attachments: DraftAttachment[] };
 const cloneAssistant = (a: AssistantMessage): AssistantMessage => ({
   ...a,
   usage: a.usage ? { ...a.usage } : undefined,
-  steps: a.steps.map((s) => ({ ...s, toolCalls: s.toolCalls?.map((c) => ({ ...c })) })),
+  steps: a.steps.map((s) => ({ ...s, toolCalls: s.toolCalls?.map((c) => ({ ...c, ...(c.command ? { command: { ...c.command } } : {}) })) })),
 });
 
 function chatIdFromUrl(): string | null {
@@ -79,6 +83,8 @@ export function ChatApp() {
   const [searchKey, setSearchKey] = useState<KeyStatus | null>(null);
   const [githubKey, setGithubKey] = useState<KeyStatus | null>(null);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState("");
+  const [platform, setPlatform] = useState<Platform>("mac");
+  const [procs, setProcs] = useState<ProcessInfo[] | null>(null); // the Running list (null until first fetched)
   const [draftPrefs, setDraftPrefs] = useState<Prefs>({
     model: "deepseek-flash",
     thinking: true,
@@ -159,7 +165,7 @@ export function ChatApp() {
   }, []);
 
   const loadSettings = useCallback(async () => {
-    const data = await api<{ settings: Settings; key: KeyStatus; searchKey: KeyStatus; githubKey: KeyStatus; defaultSystemPrompt: string }>(
+    const data = await api<{ settings: Settings; key: KeyStatus; searchKey: KeyStatus; githubKey: KeyStatus; defaultSystemPrompt: string; platform: string }>(
       "/api/settings",
     );
     setSettings(data.settings);
@@ -167,6 +173,7 @@ export function ChatApp() {
     setSearchKey(data.searchKey);
     setGithubKey(data.githubKey);
     setDefaultSystemPrompt(data.defaultSystemPrompt);
+    setPlatform(platformOf(data.platform));
     return data;
   }, []);
 
@@ -198,13 +205,14 @@ export function ChatApp() {
   );
 
   useEffect(() => {
-    api<{ settings: Settings; key: KeyStatus; searchKey: KeyStatus; githubKey: KeyStatus; defaultSystemPrompt: string }>("/api/settings")
+    api<{ settings: Settings; key: KeyStatus; searchKey: KeyStatus; githubKey: KeyStatus; defaultSystemPrompt: string; platform: string }>("/api/settings")
       .then((data) => {
         setSettings(data.settings);
         setKeyStatus(data.key);
         setSearchKey(data.searchKey);
         setGithubKey(data.githubKey);
         setDefaultSystemPrompt(data.defaultSystemPrompt);
+        setPlatform(platformOf(data.platform));
         const s = data.settings;
         setDraftPrefs((p) => ({ ...p, model: s.defaultModel, thinking: s.thinking, effort: s.effort }));
       })
@@ -232,6 +240,27 @@ export function ChatApp() {
     const t = setTimeout(() => refreshChats(search), 150);
     return () => clearTimeout(t);
   }, [search, refreshChats]);
+
+  // The Running list: checked every few seconds while the window is visible, and right away
+  // when you come back to it (commands keep running while the window is closed).
+  const refreshProcs = useCallback(async () => {
+    try {
+      setProcs(await api<ProcessInfo[]>("/api/processes"));
+    } catch {}
+  }, []);
+  useEffect(() => {
+    const poll = () => !document.hidden && api<ProcessInfo[]>("/api/processes").then(setProcs).catch(() => {});
+    api<ProcessInfo[]>("/api/processes")
+      .then(setProcs)
+      .catch(() => {});
+    const t = setInterval(poll, 3000);
+    const onVisible = () => poll();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   // ---------- Navigation ----------
 
@@ -317,6 +346,28 @@ export function ChatApp() {
   );
   const activeFolders = linked.filter((f) => !f.hidden);
   const activeKey = activeFolders.map((f) => f.path).join("|");
+
+  // ▶ Run on code blocks: only in a project with Terminal on, in the project's own folders.
+  const runChatId = chat?.id ?? null;
+  const terminalOn = !!project?.terminal;
+  const runTarget = useMemo<RunTarget | null>(() => {
+    const folders = terminalOn ? linked.filter((f) => !f.hidden && f.source === "project").map((f) => f.name) : [];
+    if (!runChatId || !folders.length) return null;
+    return {
+      chatId: runChatId,
+      folders,
+      platform,
+      onStarted: refreshProcs,
+      sendOutput: (command, output) => {
+        const body = `$ ${command}\n\n${output.length > 100_000 ? "…" + output.slice(-100_000) : output}`;
+        setAttachments((prev) => [
+          ...prev,
+          { id: nanoid(10), name: `Terminal output (${command.split("\n")[0].slice(0, 40)})`, kind: "file", size: body.length, content: body, status: "ready" },
+        ]);
+        showToast("Output added to your message.");
+      },
+    };
+  }, [runChatId, terminalOn, linked, platform, refreshProcs, showToast]);
 
   // GitHub button: hidden until set up; in a project, it needs repos picked for that project.
   const githubState: "hidden" | "ready" | "no-repos" = (() => {
@@ -476,7 +527,23 @@ export function ChatApp() {
           case "approval":
             for (const s of a.steps) {
               const call = s.toolCalls?.find((c) => c.id === ev.id);
-              if (call) Object.assign(call, { diff: ev.diff, status: "pending" });
+              if (call) Object.assign(call, { diff: ev.diff, status: "pending", ...(ev.command ? { command: ev.command } : {}) });
+            }
+            break;
+          case "command":
+            for (const s of a.steps) {
+              const call = s.toolCalls?.find((c) => c.id === ev.id);
+              if (!call) continue;
+              // The final update carries the output; until then, keep what streamed in.
+              call.command = ev.command.output !== undefined ? ev.command : { ...ev.command, output: call.command?.output };
+              if (call.status === "pending" && ev.command.status !== "pending") call.status = undefined;
+              if (ev.command.status === "running" && ev.command.background) refreshProcs();
+            }
+            break;
+          case "command_output":
+            for (const s of a.steps) {
+              const call = s.toolCalls?.find((c) => c.id === ev.id);
+              if (call?.command) call.command = { ...call.command, output: ((call.command.output ?? "") + ev.chunk).slice(-200_000) };
             }
             break;
           case "tool_result":
@@ -644,10 +711,12 @@ export function ChatApp() {
 
   // ---------- Edit mode approvals ----------
 
-  const decide = async (callId: string, decision: "approve" | "reject" | "approve_remember") => {
+  const decide = async (callId: string, decision: "approve" | "reject" | "approve_remember", command?: string) => {
     const chatId = live?.chatId;
     if (!chatId) return;
-    await api("/api/chat/approve", { method: "POST", json: { chatId, callId, decision } }).catch((e) => showToast(e.message));
+    await api("/api/chat/approve", { method: "POST", json: { chatId, callId, decision, command } }).catch((e) => showToast(e.message));
+    // "Always allow" adds a rule to the project: show it in Project settings next time.
+    if (decision === "approve_remember" && currentProjectId) api<Project>(`/api/projects/${currentProjectId}`).then(setActiveProject).catch(() => {});
   };
 
   const approveAll = async () => {
@@ -808,6 +877,7 @@ export function ChatApp() {
   }, [messages, liveHere]);
   const chatCost = messages.reduce((n, m) => n + (m.role === "assistant" ? m.usage?.cost ?? 0 : 0), 0) + (liveHere?.usage?.cost ?? 0);
 
+  const procsNow = useMemo(() => ({ loaded: procs !== null, byId: new Map((procs ?? []).map((p) => [p.id, p])) }), [procs]);
   const busyElsewhere = !!live && live.chatId !== chat?.id;
   const keyMissing = keyStatus !== null && !keyStatus.configured;
   const isEmpty = messages.length === 0 && !liveHere;
@@ -920,6 +990,7 @@ export function ChatApp() {
             )}
             <span className="truncate font-medium text-fg/90">{chat && !isEmpty ? chat.title : ""}</span>
           </div>
+          <RunningButton procs={procs ?? []} onChange={refreshProcs} />
           {activeFolders.length > 0 && !isEmpty && (
             <div className="flex items-center gap-1.5 text-[12.5px] text-muted" title={activeFolders.map((f) => f.path).join("\n")}>
               <FolderOpen size={13} /> {activeFolders[0].name}
@@ -996,6 +1067,8 @@ export function ChatApp() {
         ) : (
           <>
             <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
+              <RunContext.Provider value={runTarget}>
+              <ProcsContext.Provider value={procsNow}>
               <div className="mx-auto max-w-3xl space-y-7 px-4 pb-10 pt-4 md:px-6">
                 {messages.map((m, i) =>
                   m.role === "user" ? (
@@ -1025,6 +1098,8 @@ export function ChatApp() {
                   />
                 )}
               </div>
+              </ProcsContext.Provider>
+              </RunContext.Provider>
             </div>
             <div className="relative mx-auto w-full max-w-3xl px-2 pb-3 md:px-4">
               {!atBottom && (
@@ -1067,6 +1142,7 @@ export function ChatApp() {
         open={projectDialog.open}
         project={projectDialog.project}
         allowedRepos={settings?.githubRepos ?? []}
+        platform={platform}
         defaultDocsFolder={settings?.docsFolder ?? ""}
         onClose={() => setProjectDialog({ open: false, project: null })}
         onSaved={(saved) => {

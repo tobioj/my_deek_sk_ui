@@ -10,8 +10,8 @@ A personal, Claude-desktop-style chat app for the DeepSeek API. It runs only on 
 - **Terminal:** run `deepseek-chat`
 
 The first launch builds the app (about 30 seconds). After that it opens instantly in its own Chrome window.
-Closing the window leaves a small background server running so the app reopens instantly.
-Other commands: `deepseek-chat status`, `deepseek-chat stop`, `deepseek-chat restart`, `deepseek-chat logs`.
+Closing the window leaves a small background server running so the app reopens instantly (commands you started keep running too, in the app's Running list).
+Other commands: `deepseek-chat status` (also lists running commands), `deepseek-chat stop` (stops them and the server), `deepseek-chat restart`, `deepseek-chat logs`.
 
 ### On Windows
 
@@ -38,6 +38,7 @@ The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same 
 | **Web search** | Off by default. Turn it on in **Settings → Web search** and add a free [Tavily](https://app.tavily.com) key (1,000 searches a month). A **Search** button then appears next to Think; when it's on, DeepSeek can search the web, read pages and cite sources. |
 | **Ask / Plan / Edit / Auto** | With a folder open: **Ask** reads and answers. **Plan** writes a step-by-step plan without changing anything. **Edit** changes files, with a before/after preview and Approve/Reject for every change. **Auto** makes all the changes without asking. Every reply's changes can be undone. |
 | **Docs folder** | DeepSeek can create and update documents there in any mode (it asks first, or not, per doc). Settings sets the default; projects can set their own. |
+| **Terminal** | Per project, off by default. DeepSeek runs commands in the project's folders: look-only ones straight away, others after you click **Run** (or without asking in Auto mode on the Mac). On the Mac they run in a sandbox (only the project folders are writable; keys, logins and the Keychain are unreadable; internet off unless you allow it). On Windows there's no sandbox, so every command but look-only ones asks. Code blocks get a free **▶ Run** button, and the **Running** list shows and stops everything still running. GitHub stays read-only. |
 | **Save a reply** | **Save** under any reply writes it to a file you pick in the Mac's Save dialog. |
 | **GitHub (read-only)** | Fine-grained token, repos you tick in Settings, repos picked per project, and a GitHub button per chat (off by default). Reads code, issues, PRs, commits and CI; can't change anything. |
 | **Projects** | Group chats in the sidebar. Each project has shared context, shared files, **folders linked to every chat in it**, and a memory setting (*Project + global* or *This project only*). Chats can switch off a project folder or add their own. |
@@ -68,7 +69,7 @@ Everything is in `data/` (ignored by Git): one JSON file per chat in `data/chats
 - The server only listens on `127.0.0.1` and rejects requests from other websites, so nothing else can use it to read your files. Don't deploy it publicly.
 - In Ask and Plan mode, DeepSeek's folder access is **read-only**. In Edit mode, every change needs your approval; in Auto mode changes apply straight away. Either way, each reply's changes can be undone. Either way, it can't leave the folder you chose, including through symlinks, and it never touches `.git`, `node_modules` or secret files.
 - `.env`, private keys and similar secret files are never read or attached.
-- The app can't run Terminal commands. For that, use the `deepseek` command in a terminal (Claude Code running on DeepSeek).
+- Terminal commands only run in projects where you've switched Terminal on, only in the project's folders, and (on the Mac) inside the macOS sandbox. `sudo`, `git push`, `gh`, `curl … | sh` and background tricks like `&` never run; risky commands always ask. Closing the window doesn't stop running commands; `deepseek-chat stop` does.
 
 ## Developing
 
@@ -90,6 +91,8 @@ After changing code, `deepseek-chat restart` rebuilds and restarts the everyday 
 | `lib/github.ts` | Read-only GitHub tools (GET requests only, checked against your allowlist) |
 | `lib/docs.ts` | Docs folder tools |
 | `lib/edits.ts`, `lib/approvals.ts` | Edit mode: file-change tools, previews, backups, undo, approvals |
+| `lib/commands.ts` | Terminal rules: look-only, ask, always ask, never run |
+| `lib/sandbox.ts`, `lib/processes.ts`, `lib/terminal.ts` | Running commands: the macOS sandbox profile, the Running list, DeepSeek's command tools |
 | `lib/secrets.ts` | API keys in the macOS Keychain |
 | `lib/skip.ts` | Skip rules for junk folders, binaries and secrets |
 | `lib/tokens.ts` | Prices and token estimates (update here if DeepSeek changes prices) |

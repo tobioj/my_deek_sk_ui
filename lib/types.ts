@@ -43,6 +43,48 @@ export interface ToolCall {
   sources?: Source[]; // web pages found or read (web search tools)
   diff?: DiffPreview; // proposed or applied file change (edit tools)
   status?: "pending" | "applied" | "rejected"; // approval state (edit tools)
+  command?: CommandRun; // a terminal command (run_command)
+}
+
+// A terminal command DeepSeek asked to run, and what happened.
+export type CommandStatus = "pending" | "running" | "finished" | "failed" | "stopped" | "timed_out" | "denied" | "blocked";
+export interface CommandRun {
+  command: string;
+  folder: string; // the folder's short name
+  status: CommandStatus;
+  level: "look" | "ask" | "always_ask" | "blocked";
+  reason?: string; // why it always asks, or why it was blocked
+  rule?: string; // what "Always allow" would save for this project
+  sandboxed: boolean; // macOS sandbox (false on Windows)
+  readOnly: boolean; // Ask/Plan mode: can't change files
+  internet: boolean;
+  background?: boolean; // keeps running (a dev server); shown in the Running list
+  procId?: string; // its entry in the Running list
+  exitCode?: number | null;
+  durationMs?: number;
+  output?: string; // what it printed (start and end, if long)
+  edited?: boolean; // you changed the command before running it
+}
+
+// A command in the Running list (started by DeepSeek or by ▶ Run).
+export type ProcessStatus = "running" | "stopping" | "finished" | "failed" | "stopped" | "timed_out" | "stop_failed";
+export interface ProcessInfo {
+  id: string;
+  command: string;
+  folder: string; // folder name
+  cwd: string; // full path
+  projectId: string;
+  projectName: string;
+  chatId: string | null;
+  by: "deepseek" | "you";
+  background: boolean;
+  sandboxed: boolean;
+  status: ProcessStatus;
+  exitCode?: number | null;
+  error?: string; // e.g. why it couldn't be stopped
+  startedAt: string;
+  endedAt?: string;
+  ports: number[]; // ports it's listening on (e.g. a dev server on 3000)
 }
 
 export interface DiffHunk {
@@ -154,6 +196,10 @@ export interface Project {
   docsFolder?: string | null; // where DeepSeek saves docs for this project (default: Settings)
   githubRepos?: string[]; // repos (from the Settings allowlist) this project's chats may read
   isolated?: boolean; // true = ignore your global instructions from Settings in this project
+  terminal?: boolean; // DeepSeek may run commands in the project's folders (off by default)
+  terminalInternet?: boolean; // commands may use the internet (off by default; enforced on macOS)
+  terminalMinutes?: number; // time limit for each command DeepSeek runs: 10, 30 or 60
+  allowedCommands?: string[]; // "Always allow" rules: run without asking in Edit and Auto mode
   createdAt: string;
   updatedAt: string;
 }
@@ -216,7 +262,9 @@ export type StreamEvent =
   | { type: "text"; delta: string }
   | { type: "tool_call"; call: ToolCall }
   | { type: "tool_result"; id: string; summary: string; ok: boolean; sources?: Source[]; diff?: DiffPreview; status?: ToolCall["status"] }
-  | { type: "approval"; id: string; diff: DiffPreview }
+  | { type: "approval"; id: string; diff?: DiffPreview; command?: CommandRun }
+  | { type: "command"; id: string; command: CommandRun } // a command started, finished or was blocked
+  | { type: "command_output"; id: string; chunk: string }
   | { type: "ping" }
   | { type: "usage"; usage: Usage; contextTokens: number }
   | { type: "title"; title: string }

@@ -7,10 +7,11 @@ import { EDIT_TOOL_NAMES } from "./edits";
 import { GITHUB_TOOL_NAMES } from "./github";
 import type { Root } from "./roots";
 import { fileBlock } from "./skip";
+import { COMMAND_TOOL_NAMES, type TerminalAccess } from "./terminal";
 import { WORKSPACE_TOOL_NAMES } from "./tools";
 import { WEB_TOOL_NAMES } from "./websearch";
 import { DEFAULT_SYSTEM_PROMPT, readUploadAsDataUrl } from "./storage";
-import { isEditingMode, MODELS, type Chat, type Mode, type Project, type Settings } from "./types";
+import { isEditingMode, MODELS, MODES, type AssistantMessage, type Chat, type Mode, type Project, type Settings } from "./types";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type Part = OpenAI.Chat.Completions.ChatCompletionContentPart;
@@ -21,6 +22,43 @@ export interface ToolAccess {
   mode: Mode; // what DeepSeek may do with the folder
   docs: string | null; // Docs folder DeepSeek may save documents to (any mode)
   github: string[]; // GitHub repos DeepSeek may read
+  terminal?: TerminalAccess | null; // DeepSeek may run commands in the project's folders
+}
+
+const NO_COMMANDS = "You can't run commands; tell the user what to run to test.";
+const WITH_COMMANDS = "You can run commands with run_command (see Terminal below): use it to run tests and builds when that helps.";
+
+function terminalPrompt(t: TerminalAccess, mode: Mode): string {
+  const many = t.roots.length > 1;
+  const where = many ? t.roots.map((r) => `\`${r.name}\` (${r.abs})`).join(", ") : `\`${t.roots[0].abs}\``;
+  const readOnly = mode === "ask" || mode === "plan";
+  const shell = t.platform === "windows" ? `${t.shell} (Windows)` : "zsh (macOS)";
+  const asking =
+    t.platform === "mac"
+      ? mode === "auto"
+        ? "In Auto mode other commands run without asking, except risky ones (deleting folders, throwing away work, publishing, secret files), which always ask."
+        : "Other commands ask the user first, unless they've chosen to always allow them."
+      : "Every other command asks the user first, because Windows has no sandbox.";
+  const lines = [
+    `You can run terminal commands with run_command in the project's folder${many ? "s" : ""}: ${where}. ` +
+      `They run in ${shell}, starting in ${many ? "the folder you name with `folder` (default: the first one)" : "that folder"}.`,
+    t.sandboxed
+      ? `- They run in a sandbox: they can only change files inside the project folder${many ? "s" : ""}` +
+        (readOnly ? ` — and in ${mode === "ask" ? "Ask" : "Plan"} mode not even there, so only run commands that look` : "") +
+        `. They can't read the user's SSH keys, logins or Keychain.`
+      : readOnly
+        ? `- In ${mode === "ask" ? "Ask" : "Plan"} mode, only run commands that look; don't change files.`
+        : "",
+    `- Internet: ${t.internet ? "on" : "off. Installs, downloads and git fetch/pull won't work; if a task needs them, tell the user they can turn on Internet in the project settings"}.`,
+    "- GitHub is read-only: git push, the gh command line and saved git logins aren't available. Never try to change anything on GitHub.",
+    "- Commands can't read input: use non-interactive flags (--yes, -y) and run test runners once, not in watch mode (e.g. `vitest run`, `jest --watchAll=false`).",
+    `- Each command can run for up to ${t.minutes} minutes. For servers and watchers (e.g. npm run dev), set background: true, then use check_command to read their output and stop_command when you're done. Don't use &, nohup or similar: they're blocked.`,
+    "- Long output is cut down to its start and end, so narrow it where you can (e.g. `| tail -50`, a quiet flag).",
+    `- Look-only commands (ls, cat, grep, git status/diff/log…) run straight away. ${asking} If the user declines a command, don't run it again as-is.`,
+    "- What commands change can't be undone with the Undo button, so be careful with anything destructive.",
+    `- Only run what the task needs, and say what you ran and what happened. When you want the user to run something themselves, put it in a \`\`\`${t.platform === "windows" ? "powershell" : "bash"} block: they can click ▶ Run on it.`,
+  ];
+  return `\n\n## Terminal\n` + lines.filter(Boolean).join("\n");
 }
 
 const MODE_PROMPTS: Record<Mode, string> = {
@@ -46,6 +84,56 @@ const MODE_PROMPTS: Record<Mode, string> = {
     `use write_file for new files. Stay focused on what was asked. You can't run commands; tell the user what to run to test. ` +
     `When you're done, summarize every file you changed and why.`,
 };
+
+// Exactly what DeepSeek can do in this chat right now. Modes and switches can change mid-chat,
+// and the model tends to believe its own earlier replies ("I don't have tools to edit files"),
+// so this is spelled out on every request.
+function toolsPrompt(access: ToolAccess): string {
+  const names = (set: Set<string>) => [...set].join(", ");
+  const editing = access.roots.length > 0 && isEditingMode(access.mode);
+  const lines = [
+    access.roots.length ? `- Read the project folder${access.roots.length > 1 ? "s" : ""}: ${names(WORKSPACE_TOOL_NAMES)}` : "",
+    editing ? `- Create, change and delete files: ${names(EDIT_TOOL_NAMES)}` : "",
+    access.terminal ? `- Run terminal commands: ${names(COMMAND_TOOL_NAMES)}` : "",
+    access.docs ? `- Save documents to the Docs folder: ${names(DOC_TOOL_NAMES)}` : "",
+    access.web ? `- Search and read the web: ${names(WEB_TOOL_NAMES)}` : "",
+    access.github.length ? `- Read GitHub: ${names(GITHUB_TOOL_NAMES)}` : "",
+  ].filter(Boolean);
+  if (!lines.length) return "";
+  let text =
+    `\n\n## Your tools right now\n${lines.join("\n")}\n\n` +
+    `This list is always up to date. The user can switch modes and settings during a chat, so if an earlier message ` +
+    `in this conversation says you couldn't do something (such as editing files or running commands), that no longer ` +
+    `applies: go by this list. Never tell the user you don't have a tool that's listed here; use it.`;
+  if (access.roots.length && !editing) {
+    text +=
+      ` You can't change project files in ${MODES[access.mode].label} mode. If the user wants you to make changes, tell them to ` +
+      `switch the chat to Edit or Auto mode (the mode buttons next to the model picker)` +
+      (access.docs ? `; you can still save documents with save_document.` : ".");
+  }
+  return text;
+}
+
+// When the user switched modes since DeepSeek's last reply, say so right where it'll notice.
+function modeSwitchNote(chat: Chat, access: ToolAccess): string | null {
+  if (!access.roots.length) return null;
+  const last = [...chat.messages].reverse().find((m): m is AssistantMessage => m.role === "assistant");
+  if (!last?.mode || last.mode === access.mode) return null;
+  const from = MODES[last.mode].label;
+  const to = MODES[access.mode].label;
+  if (isEditingMode(access.mode) && !isEditingMode(last.mode)) {
+    return (
+      `[Note from the app: the user switched this chat from ${from} mode to ${to} mode. You now have the tools to create, ` +
+      `change and delete files (${[...EDIT_TOOL_NAMES].join(", ")})` +
+      (access.mode === "auto" ? ", and your changes apply without asking" : ", and the user approves each change") +
+      `. Anything said earlier about not being able to edit files no longer applies.]`
+    );
+  }
+  if (!isEditingMode(access.mode) && isEditingMode(last.mode)) {
+    return `[Note from the app: the user switched this chat from ${from} mode to ${to} mode, so you can't change files now.]`;
+  }
+  return `[Note from the app: the user switched this chat from ${from} mode to ${to} mode.]`;
+}
 
 async function systemPrompt(chat: Chat, settings: Settings, access: ToolAccess, project: Project | null): Promise<string> {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -85,9 +173,10 @@ async function systemPrompt(chat: Chat, settings: Settings, access: ToolAccess, 
       `You have access to ${where} Use the tools list_directory, read_file, search_files and find_files. ` +
       `Explore yourself instead of asking the user to paste code: read the relevant files before answering ` +
       `questions about them, and call several tools in parallel when that's faster.\n\n` +
-      MODE_PROMPTS[access.mode] +
+      (access.terminal ? MODE_PROMPTS[access.mode].replace(NO_COMMANDS, WITH_COMMANDS) : MODE_PROMPTS[access.mode]) +
       (maps.some(Boolean) ? `\n\nTop of the folder map${roots.length > 1 ? "s" : ""}:\n\`\`\`\n${maps.filter(Boolean).join("\n\n")}\n\`\`\`` : "");
   }
+  if (access.terminal) prompt += terminalPrompt(access.terminal, access.mode);
   if (access.docs) {
     prompt +=
       `\n\n## Docs folder\n` +
@@ -112,19 +201,20 @@ async function systemPrompt(chat: Chat, settings: Settings, access: ToolAccess, 
       `or when you aren't sure — but answer directly from your own knowledge when that's clearly enough. ` +
       `Cite the pages you used as Markdown links, e.g. [Title](https://example.com).`;
   }
-  return prompt;
+  return prompt + toolsPrompt(access);
 }
 
 export async function buildMessages(chat: Chat, settings: Settings, access: ToolAccess, project: Project | null = null): Promise<Msg[]> {
   const vision = MODELS[chat.model].vision;
   const hasFolders = access.roots.length > 0;
-  const useTools = hasFolders || access.web || !!access.docs || access.github.length > 0;
+  const useTools = hasFolders || access.web || !!access.docs || access.github.length > 0 || !!access.terminal;
   const sendReasoning = useTools && chat.thinking; // DeepSeek requires past reasoning when tools are in play
   const available = (name: string) =>
     (hasFolders && (WORKSPACE_TOOL_NAMES.has(name) || (isEditingMode(access.mode) && EDIT_TOOL_NAMES.has(name)))) ||
     (access.web && WEB_TOOL_NAMES.has(name)) ||
     (!!access.docs && DOC_TOOL_NAMES.has(name)) ||
-    (access.github.length > 0 && GITHUB_TOOL_NAMES.has(name));
+    (access.github.length > 0 && GITHUB_TOOL_NAMES.has(name)) ||
+    (!!access.terminal && COMMAND_TOOL_NAMES.has(name));
   const out: Msg[] = [{ role: "system", content: await systemPrompt(chat, settings, access, project) }];
 
   for (const m of chat.messages) {
@@ -173,6 +263,15 @@ export async function buildMessages(chat: Chat, settings: Settings, access: Tool
       const text = [...m.steps.map((s) => s.content), undoneNote].filter(Boolean).join("\n\n");
       if (text) out.push({ role: "assistant", content: text });
     }
+  }
+
+  // Mode switched since the last reply: tell DeepSeek in the message it's answering.
+  const note = modeSwitchNote(chat, access);
+  const lastUser = out.findLastIndex((m) => m.role === "user");
+  if (note && lastUser > 0) {
+    const m = out[lastUser];
+    if (typeof m.content === "string") m.content = `${m.content}\n\n${note}`;
+    else if (Array.isArray(m.content)) (m.content as Part[]).push({ type: "text", text: note });
   }
 
   // A failed or empty reply can leave two user messages in a row, and a switched-off tool can

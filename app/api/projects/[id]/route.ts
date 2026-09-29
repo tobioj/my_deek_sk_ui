@@ -2,7 +2,7 @@
 import { validFolders } from "@/lib/validate";
 import { deleteProject, getProject, saveProject } from "@/lib/storage";
 import type { Project } from "@/lib/types";
-import { cleanFiles, repoList } from "../shared";
+import { cleanFiles, repoList, terminalFields } from "../shared";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/projects/[id]">) {
   const { id } = await ctx.params;
@@ -29,6 +29,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/projects/[id]"
   if (typeof body.isolated === "boolean") project.isolated = body.isolated;
   if (body.docsFolder === null || typeof body.docsFolder === "string") project.docsFolder = body.docsFolder?.trim() || null;
   if (Array.isArray(body.githubRepos)) project.githubRepos = repoList(body.githubRepos);
+  Object.assign(project, terminalFields(body as Record<string, unknown>));
   project.updatedAt = new Date().toISOString();
   await saveProject(project);
   return Response.json(project);
