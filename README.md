@@ -46,6 +46,8 @@ The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same 
 | **Models** | **V4.1 Flash** (fast, cheap, sees images) or **V4 Pro** (smartest, text only). |
 | **Token meter** | The ring next to the model picker shows how full the conversation is, what it's cost so far, and what the next message will cost. |
 | **Stop, edit, retry** | Stop a reply with the ■ button or **Esc**. Hover your message to edit and resend it. **Retry** regenerates the last reply. |
+| **Send while it's replying** | Messages you send while DeepSeek is working go in at its next step, so it takes them into account in the same reply. **Answer together now** cuts off what it's writing and starts again with your message. Stop puts waiting messages back in the message box. |
+| **Several chats at once** | Up to 4 chats can reply at the same time. The sidebar marks chats that are replying (blue) or waiting for your approval (amber), and warns you when two chats are editing the same folder. |
 | **Saved chats** | Everything is saved automatically. Search, rename, export to Markdown or delete from the sidebar. |
 
 Long pasted text (more than 4,000 characters) turns into an attachment, like in Claude.

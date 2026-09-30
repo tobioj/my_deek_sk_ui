@@ -38,7 +38,8 @@ export const Sidebar = forwardRef<
   {
     chats: ChatSummary[];
     activeId: string | null;
-    streamingId: string | null;
+    streamingIds: Set<string>; // chats replying right now
+    waitingIds: Set<string>; // chats waiting for you to approve a change or command
     search: string;
     onSearch: (q: string) => void;
     onSelect: (id: string) => void;
@@ -66,7 +67,8 @@ export const Sidebar = forwardRef<
   const rowProps = (c: ChatSummary) => ({
     chat: c,
     active: c.id === p.activeId,
-    streaming: c.id === p.streamingId,
+    streaming: p.streamingIds.has(c.id),
+    waiting: p.waitingIds.has(c.id),
     projects: p.projects,
     onSelect: () => p.onSelect(c.id),
     onRename: (t: string) => p.onRename(c.id, t),
@@ -145,6 +147,9 @@ export const Sidebar = forwardRef<
             {p.projects.map((proj) => {
               const open = p.expanded.has(proj.id);
               const chats = p.chats.filter((c) => c.projectId === proj.id);
+              // A folded project still shows that one of its chats is replying or waiting for you.
+              const waiting = !open && chats.some((c) => p.waitingIds.has(c.id));
+              const replying = !open && chats.some((c) => p.streamingIds.has(c.id));
               return (
                 <div key={proj.id}>
                   <div className="group relative">
@@ -160,6 +165,7 @@ export const Sidebar = forwardRef<
                       <ChevronRight size={14} className={clsx("shrink-0 text-faint transition-transform", open && "rotate-90")} />
                       <Layers size={14} className="shrink-0 text-accent" />
                       <span className="truncate font-medium">{proj.name}</span>
+                      {(waiting || replying) && <ActivityDot waiting={waiting} />}
                       {chats.length > 0 && !open && <span className="ml-auto shrink-0 text-[11px] text-faint">{chats.length}</span>}
                     </button>
                     <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
@@ -233,10 +239,20 @@ export const Sidebar = forwardRef<
   );
 });
 
+// Replying (pulsing blue) or waiting for your approval (amber).
+function ActivityDot({ waiting }: { waiting: boolean }) {
+  return waiting ? (
+    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" title="Waiting for you to approve something" />
+  ) : (
+    <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" title="Replying" />
+  );
+}
+
 function ChatRow({
   chat,
   active,
   streaming,
+  waiting,
   projects,
   tag,
   onSelect,
@@ -247,6 +263,7 @@ function ChatRow({
   chat: ChatSummary;
   active: boolean;
   streaming: boolean;
+  waiting: boolean;
   projects: ProjectSummary[];
   tag?: string;
   onSelect: () => void;
@@ -297,8 +314,9 @@ function ChatRow({
         )}
         title={chat.folders.length ? `${chat.title}\n${chat.folders.map((f) => `📁 ${f}`).join("\n")}` : chat.title}
       >
-        {streaming && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />}
+        {(streaming || waiting) && <ActivityDot waiting={waiting} />}
         <span className="truncate">{chat.title}</span>
+        {waiting && <span className="shrink-0 text-[10.5px] font-medium text-warn">waiting</span>}
         {tag && <span className="shrink-0 rounded bg-surface-2 px-1.5 text-[10.5px] text-muted">{tag}</span>}
         {chat.folders.length > 0 && <FolderOpen size={12} className="shrink-0 text-faint" />}
       </button>

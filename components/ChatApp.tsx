@@ -20,15 +20,16 @@ import type {
   ProcessInfo,
   ProjectSummary,
   Settings,
+  ToolCall,
   UserMessage,
 } from "@/lib/types";
 import { isEditingMode } from "@/lib/types";
-import { baseName, linkedFolders, ownFolders, projectFolders } from "@/lib/folders";
+import { baseName, folderKey, linkedFolders, ownFolders, projectFolders } from "@/lib/folders";
 import { platformOf, type Platform } from "@/lib/commands";
 import { Composer } from "./Composer";
 import { FolderDialog, rememberFolder, type DroppedFolder } from "./FolderDialog";
 import { RunContext, type RunTarget } from "./Markdown";
-import { AssistantBlock, UserBubble } from "./Message";
+import { AssistantBlock, QueuedBubble, UserBubble } from "./Message";
 import { ProjectDialog } from "./ProjectDialog";
 import { ProcsContext, RunningButton } from "./RunningList";
 import { SettingsDialog } from "./SettingsDialog";
@@ -48,6 +49,14 @@ type Prefs = {
   projectId: string | null;
 };
 const EXPANDED_KEY = "expandedProjects";
+// Chats that can reply at the same time. Each reply keeps a connection open, and browsers allow
+// about 6 per app, so this leaves room for everything else (loading chats, the Running list…).
+const MAX_REPLIES = 4;
+// A reply in progress, plus what it may change (for the "another chat is editing this folder" warning).
+type LiveReply = { assistant: AssistantMessage; editing: boolean; folders: string[] };
+// A message you sent while that chat was still replying. It waits for the reply's next step.
+// text/attachments are kept so it can go back into the message box if it isn't delivered.
+type Queued = { message: UserMessage; text: string; attachments: DraftAttachment[]; now?: boolean };
 type Draft = { text: string; attachments: DraftAttachment[] };
 
 const cloneAssistant = (a: AssistantMessage): AssistantMessage => ({
@@ -109,7 +118,8 @@ export function ChatApp() {
   const [activeProject, setActiveProject] = useState<Project | null>(null); // full details of the current chat's project
   const [gitChanged, setGitChanged] = useState(0);
   const [gitCheck, setGitCheck] = useState(0); // bump to re-check Git status
-  const [live, setLive] = useState<{ chatId: string; assistant: AssistantMessage } | null>(null);
+  const [lives, setLives] = useState<Record<string, LiveReply>>({}); // replies in progress, by chat
+  const [queued, setQueued] = useState<Record<string, Queued[]>>({}); // messages waiting for a reply's next step, by chat
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || window.innerWidth >= 900);
   const narrow = useSyncExternalStore(
     (cb) => {
@@ -129,7 +139,11 @@ export function ChatApp() {
   const [toast, setToast] = useState<string | null>(null);
   const [atBottom, setAtBottom] = useState(true);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRefs = useRef(new Map<string, AbortController>()); // one per chat that's replying
+  const doneAway = useRef(new Map<string, AssistantMessage>()); // replies that finished while you were in another chat
+  const queuedRef = useRef<Record<string, Queued[]>>({}); // same as `queued`, always current
+  const delivered = useRef(new Set<string>()); // waiting messages DeepSeek has already been given
+  const chatsRef = useRef<ChatSummary[]>([]);
   const chatRef = useRef<Chat | null>(null);
   const draftPrefsRef = useRef(draftPrefs);
   const drafts = useRef(new Map<string, Draft>());
@@ -141,12 +155,35 @@ export function ChatApp() {
     chatRef.current = chat;
   }, [chat]);
   useEffect(() => {
+    chatsRef.current = chats;
+  }, [chats]);
+  useEffect(() => {
     draftPrefsRef.current = draftPrefs;
   }, [draftPrefs]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast((t) => (t === msg ? null : t)), 4500);
+  }, []);
+
+  // Waiting messages: kept in a ref too, so the stream handler always sees the latest list.
+  const updateQueued = useCallback((chatId: string, fn: (list: Queued[]) => Queued[]) => {
+    const next = { ...queuedRef.current, [chatId]: fn(queuedRef.current[chatId] ?? []) };
+    if (!next[chatId].length) delete next[chatId];
+    queuedRef.current = next;
+    setQueued(next);
+  }, []);
+
+  // Put text and attachments back into a chat's message box (or its saved draft, if you're elsewhere).
+  const returnToBox = useCallback((chatId: string, back: string, atts: DraftAttachment[]) => {
+    if (!back && !atts.length) return;
+    if (chatRef.current?.id === chatId) {
+      setText((t) => [back, t.trim()].filter(Boolean).join("\n\n"));
+      setAttachments((prev) => [...atts, ...prev]);
+    } else {
+      const d = drafts.current.get(chatId) ?? { text: "", attachments: [] };
+      drafts.current.set(chatId, { text: [back, d.text.trim()].filter(Boolean).join("\n\n"), attachments: [...atts, ...d.attachments] });
+    }
   }, []);
 
   // ---------- Loading ----------
@@ -191,7 +228,14 @@ export function ChatApp() {
   const loadChat = useCallback(
     async (id: string) => {
       try {
-        const c = await api<Chat>(`/api/chats/${id}`);
+        let c = await api<Chat>(`/api/chats/${id}`);
+        // A reply that finished while you were elsewhere is saved, but this copy may have been
+        // fetched a moment before it was: add it if it's missing.
+        const done = doneAway.current.get(id);
+        if (done && !abortRefs.current.has(id)) {
+          doneAway.current.delete(id);
+          if (!c.messages.some((m) => m.id === done.id)) c = { ...c, messages: [...c.messages, done] };
+        }
         setChat(c);
         restoreDraft(c.id);
         stickRef.current = true;
@@ -309,7 +353,7 @@ export function ChatApp() {
   };
 
   const deleteChat = async (id: string) => {
-    if (live?.chatId === id) abortRef.current?.abort();
+    abortRefs.current.get(id)?.abort();
     setChats((list) => list.filter((c) => c.id !== id));
     if (chat?.id === id) {
       setChat(null);
@@ -346,6 +390,10 @@ export function ChatApp() {
   );
   const activeFolders = linked.filter((f) => !f.hidden);
   const activeKey = activeFolders.map((f) => f.path).join("|");
+
+  // This chat's reply in progress, if it's replying.
+  const liveHere = chat ? (lives[chat.id]?.assistant ?? null) : null;
+  const replyingHere = !!liveHere;
 
   // ▶ Run on code blocks: only in a project with Terminal on, in the project's own folders.
   const runChatId = chat?.id ?? null;
@@ -472,10 +520,21 @@ export function ChatApp() {
 
   // ---------- Sending & streaming ----------
 
+  // Is there room for another reply? (Up to MAX_REPLIES chats can reply at once.)
+  const roomForReply = () => {
+    if (abortRefs.current.size < MAX_REPLIES) return true;
+    showToast(`${MAX_REPLIES} chats are already replying. Wait for one to finish, or stop one, before starting another.`);
+    return false;
+  };
+
   const stream = async (chatId: string, body: Record<string, unknown>, optimisticId?: string) => {
     const ac = new AbortController();
-    abortRef.current = ac;
-    stickRef.current = true;
+    abortRefs.current.set(chatId, ac);
+    doneAway.current.delete(chatId);
+    if (chatRef.current?.id === chatId || !chatRef.current) stickRef.current = true;
+    // What this reply may change, for the warning when two chats edit the same folder.
+    const editing = isEditingMode(prefs.mode);
+    const folders = activeFolders.map((f) => f.path);
     const model = chatRef.current?.id === chatId ? chatRef.current.model : draftPrefsRef.current.model;
     const a: AssistantMessage = { id: `live-${nanoid(8)}`, role: "assistant", createdAt: new Date().toISOString(), model, steps: [] };
     const cur = () => {
@@ -483,11 +542,12 @@ export function ChatApp() {
       return a.steps[a.steps.length - 1];
     };
     let frame = 0;
+    const show = () => setLives((m) => ({ ...m, [chatId]: { assistant: cloneAssistant(a), editing, folders } }));
     const flush = () => {
       frame = 0;
-      setLive({ chatId, assistant: cloneAssistant(a) });
+      show();
     };
-    setLive({ chatId, assistant: cloneAssistant(a) });
+    show();
 
     let final: AssistantMessage | null = null;
     try {
@@ -529,6 +589,10 @@ export function ChatApp() {
               const call = s.toolCalls?.find((c) => c.id === ev.id);
               if (call) Object.assign(call, { diff: ev.diff, status: "pending", ...(ev.command ? { command: ev.command } : {}) });
             }
+            if (chatRef.current?.id !== chatId) {
+              const title = chatsRef.current.find((c) => c.id === chatId)?.title;
+              showToast(`${title ? `“${title}”` : "Another chat"} is waiting for you to approve something.`);
+            }
             break;
           case "command":
             for (const s of a.steps) {
@@ -540,6 +604,37 @@ export function ChatApp() {
               if (ev.command.status === "running" && ev.command.background) refreshProcs();
             }
             break;
+          case "split": {
+            // Your waiting messages went in. The reply so far (if anything was written) and your
+            // messages are now part of the chat, and the reply carries on (or starts over).
+            for (const u of ev.users) delivered.current.add(u.id);
+            const add: ChatMessage[] = [...(ev.done ? [ev.done] : []), ...ev.users];
+            setChat((c) => (c && c.id === chatId ? { ...c, messages: [...c.messages, ...add] } : c));
+            const ids = new Set(ev.users.map((u) => u.id));
+            updateQueued(chatId, (list) => list.filter((q) => !ids.has(q.message.id)));
+            if (ev.next) {
+              a.id = ev.next.id;
+              a.model = ev.next.model;
+            }
+            a.steps = [];
+            a.usage = undefined;
+            a.contextTokens = undefined;
+            a.cutOff = undefined;
+            break;
+          }
+          case "step_cut": {
+            // "Answer together now" cut off what it was writing.
+            if (ev.drop) a.steps.pop();
+            else {
+              const s = cur();
+              s.toolCalls = undefined;
+              if (s.content) {
+                s.content = `${s.content.trimEnd()} …`;
+                a.cutOff = true;
+              } else s.reasoning = undefined;
+            }
+            break;
+          }
           case "command_output":
             for (const s of a.steps) {
               const call = s.toolCalls?.find((c) => c.id === ev.id);
@@ -576,19 +671,48 @@ export function ChatApp() {
       else a.error = (err as Error).message || "The connection was interrupted.";
     }
     cancelAnimationFrame(frame);
+    // Stopped (or cut off) before the server's final copy arrived: nothing is waiting for you any
+    // more, and a command that was running was stopped along with the reply.
+    const settle = (c: ToolCall): ToolCall => {
+      const command =
+        c.command?.status === "pending"
+          ? { ...c.command, status: "denied" as const }
+          : c.command?.status === "running" && !c.command.background
+            ? { ...c.command, status: "stopped" as const }
+            : c.command;
+      return { ...c, status: c.status === "pending" ? undefined : c.status, ...(command ? { command } : {}) };
+    };
     const result: AssistantMessage = final ?? {
       ...cloneAssistant(a),
-      steps: a.steps.filter((s) => s.content || s.reasoning || s.toolCalls?.length),
+      steps: a.steps.filter((s) => s.content || s.reasoning || s.toolCalls?.length).map((s) => ({ ...s, toolCalls: s.toolCalls?.map(settle) })),
     };
-    setChat((c) => (c && c.id === chatId ? { ...c, messages: [...c.messages, result] } : c));
-    setLive((l) => (l?.chatId === chatId ? null : l));
-    if (abortRef.current === ac) abortRef.current = null;
+    setChat((c) => (c && c.id === chatId ? (c.messages.some((m) => m.id === result.id) ? c : { ...c, messages: [...c.messages, result] }) : c));
+    doneAway.current.set(chatId, result); // in case you open this chat again before it's reloaded
+    setLives((m) => {
+      const next = { ...m };
+      delete next[chatId];
+      return next;
+    });
+    if (abortRefs.current.get(chatId) === ac) abortRefs.current.delete(chatId);
+    // Messages still waiting weren't delivered (you pressed Stop, or the reply failed): back into
+    // the message box, so nothing is sent without you.
+    const left = (queuedRef.current[chatId] ?? []).filter((q) => !delivered.current.has(q.message.id));
+    updateQueued(chatId, () => []);
+    if (left.length) {
+      returnToBox(
+        chatId,
+        left.map((q) => q.text).filter(Boolean).join("\n\n"),
+        left.flatMap((q) => q.attachments),
+      );
+      showToast(left.length === 1 ? "Your waiting message wasn't sent, so it's back in the message box." : "Your waiting messages weren't sent, so they're back in the message box.");
+    }
     refreshChats(search);
     if (result.error && /api key/i.test(result.error)) loadSettings().catch(() => {});
   };
 
   const send = async () => {
-    if (live) return;
+    if (liveHere) return queueMessage(); // still replying: DeepSeek reads it at its next step
+    if (!roomForReply()) return;
     const ready = attachments.filter((a) => a.status === "ready");
     const body = {
       text: text.trim(),
@@ -627,7 +751,66 @@ export function ChatApp() {
     await stream(target.id, { action: "send", ...body }, optimistic.id);
   };
 
-  const stop = () => abortRef.current?.abort();
+  // While this chat is replying: the message waits for the reply's next step.
+  const queueMessage = async () => {
+    const chatId = chatRef.current?.id;
+    if (!chatId) return;
+    const ready = attachments.filter((a) => a.status === "ready");
+    const typed = text.trim();
+    if (!typed && !ready.length) return;
+    setText("");
+    setAttachments((prev) => prev.filter((a) => a.status !== "ready"));
+    stickRef.current = true;
+    try {
+      const res = await fetch("/api/chat/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        body: JSON.stringify({ chatId, text: typed, attachments: ready.map(({ status, error, ...a }) => a) }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { message?: UserMessage; error?: string };
+      if (!res.ok || !d.message) {
+        returnToBox(chatId, typed, ready);
+        showToast(res.status === 409 ? "DeepSeek just finished. Press Enter to send your message." : d.error || "Couldn't send that.");
+        return;
+      }
+      if (delivered.current.has(d.message.id)) return; // it already went in
+      if (!abortRefs.current.has(chatId)) {
+        // The reply ended while this was on its way.
+        returnToBox(chatId, typed, ready);
+        showToast("DeepSeek just finished. Press Enter to send your message.");
+        return;
+      }
+      updateQueued(chatId, (list) => [...list, { message: d.message!, text: typed, attachments: ready }]);
+    } catch {
+      returnToBox(chatId, typed, ready);
+      showToast("Couldn't reach the app.");
+    }
+  };
+
+  // Take a waiting message back into the message box.
+  const cancelQueued = async (chatId: string, q: Queued) => {
+    const r = await api<{ ok: boolean }>("/api/chat/queue", { method: "POST", json: { chatId, cancel: q.message.id } }).catch(() => ({ ok: false }));
+    if (!r.ok) return showToast("Too late: DeepSeek has already read it.");
+    updateQueued(chatId, (list) => list.filter((x) => x.message.id !== q.message.id));
+    returnToBox(chatId, q.text, q.attachments);
+  };
+
+  // "Answer together now": cut off what DeepSeek is writing so it starts again with your messages.
+  const answerTogether = async (chatId: string) => {
+    updateQueued(chatId, (list) => list.map((x) => ({ ...x, now: true })));
+    const r = await api<{ cut: boolean; phase?: string }>("/api/chat/queue", { method: "POST", json: { chatId, now: true } }).catch(() => ({ cut: false, phase: undefined }));
+    if (r.cut) return;
+    updateQueued(chatId, (list) => list.map((x) => ({ ...x, now: false })));
+    if (r.phase === "approval") showToast("DeepSeek is waiting for your approval. It reads your message right after you decide.");
+    else if (r.phase === "tools") showToast("DeepSeek is in the middle of a step. It reads your message as soon as that's done.");
+  };
+
+  // Stop the reply in the chat you're looking at (other chats keep going).
+  const stop = () => {
+    const id = chatRef.current?.id;
+    if (id) abortRefs.current.get(id)?.abort();
+  };
 
   // Undo a reply's file changes. Returns false if the person backed out.
   const undoReply = async (chatId: string, messageId: string, ask = true): Promise<boolean> => {
@@ -669,7 +852,7 @@ export function ChatApp() {
   };
 
   const regenerate = async () => {
-    if (!chat || live) return;
+    if (!chat || liveHere || !roomForReply()) return;
     const msgs = [...chat.messages];
     const removed: ChatMessage[] = [];
     while (msgs.length && msgs[msgs.length - 1].role === "assistant") removed.push(msgs.pop()!);
@@ -679,7 +862,7 @@ export function ChatApp() {
   };
 
   const editMessage = async (messageId: string, newText: string) => {
-    if (!chat || live) return;
+    if (!chat || liveHere || !roomForReply()) return;
     const i = chat.messages.findIndex((m) => m.id === messageId);
     if (i === -1) return;
     if (!(await settleChanges(chat.messages.slice(i + 1)))) return;
@@ -711,17 +894,18 @@ export function ChatApp() {
 
   // ---------- Edit mode approvals ----------
 
+  // Approvals come from the reply in the chat you're looking at.
   const decide = async (callId: string, decision: "approve" | "reject" | "approve_remember", command?: string) => {
-    const chatId = live?.chatId;
-    if (!chatId) return;
+    const chatId = chatRef.current?.id;
+    if (!chatId || !abortRefs.current.has(chatId)) return;
     await api("/api/chat/approve", { method: "POST", json: { chatId, callId, decision, command } }).catch((e) => showToast(e.message));
     // "Always allow" adds a rule to the project: show it in Project settings next time.
     if (decision === "approve_remember" && currentProjectId) api<Project>(`/api/projects/${currentProjectId}`).then(setActiveProject).catch(() => {});
   };
 
   const approveAll = async () => {
-    const chatId = live?.chatId;
-    if (!chatId) return;
+    const chatId = chatRef.current?.id;
+    if (!chatId || !abortRefs.current.has(chatId)) return;
     setChat((c) => (c && c.id === chatId ? { ...c, mode: "auto" } : c));
     await api("/api/chat/approve", { method: "POST", json: { chatId, decision: "approve_all" } }).catch((e) => showToast(e.message));
   };
@@ -729,7 +913,7 @@ export function ChatApp() {
 
   // Uncommitted-changes warning for Edit mode.
   useEffect(() => {
-    if (!activeKey || !isEditingMode(prefs.mode) || live) return;
+    if (!activeKey || !isEditingMode(prefs.mode) || replyingHere) return;
     let cancelled = false;
     Promise.all(
       activeKey.split("|").map((root) =>
@@ -741,7 +925,7 @@ export function ChatApp() {
     return () => {
       cancelled = true;
     };
-  }, [activeKey, prefs.mode, live, gitCheck]);
+  }, [activeKey, prefs.mode, replyingHere, gitCheck]);
 
   // ---------- Folders ----------
 
@@ -819,12 +1003,11 @@ export function ChatApp() {
 
   // ---------- Scrolling ----------
 
-  const liveHere = live && chat && live.chatId === chat.id ? live.assistant : null;
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [chat?.messages.length, chat?.id, liveHere]);
+  }, [chat?.messages.length, chat?.id, liveHere, queued]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -852,8 +1035,10 @@ export function ChatApp() {
       } else if (mod && e.key === ",") {
         e.preventDefault();
         setSettingsOpen(true);
-      } else if (e.key === "Escape" && abortRef.current && !settingsOpen && !folderOpen) {
-        abortRef.current.abort();
+      } else if (e.key === "Escape" && !settingsOpen && !folderOpen) {
+        // Esc stops the reply in the chat you're looking at.
+        const id = chatRef.current?.id;
+        if (id) abortRefs.current.get(id)?.abort();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -878,7 +1063,30 @@ export function ChatApp() {
   const chatCost = messages.reduce((n, m) => n + (m.role === "assistant" ? m.usage?.cost ?? 0 : 0), 0) + (liveHere?.usage?.cost ?? 0);
 
   const procsNow = useMemo(() => ({ loaded: procs !== null, byId: new Map((procs ?? []).map((p) => [p.id, p])) }), [procs]);
-  const busyElsewhere = !!live && live.chatId !== chat?.id;
+  // Which chats are replying, and which are waiting for you to approve something.
+  const streamingIds = useMemo(() => new Set(Object.keys(lives)), [lives]);
+  const waitingIds = useMemo(
+    () =>
+      new Set(
+        Object.entries(lives)
+          .filter(([, l]) => l.assistant.steps.some((s) => s.toolCalls?.some((c) => c.status === "pending")))
+          .map(([id]) => id),
+      ),
+    [lives],
+  );
+  const atCap = !liveHere && streamingIds.size >= MAX_REPLIES;
+  // Another chat is changing one of this chat's folders right now (both in Edit or Auto mode).
+  const clash = (() => {
+    if (!isEditingMode(prefs.mode)) return null;
+    const key = (p: string) => folderKey(p, platform === "windows");
+    const mine = new Set(activeFolders.map((f) => key(f.path)));
+    for (const [id, l] of Object.entries(lives)) {
+      if (id === chat?.id || !l.editing) continue;
+      const shared = l.folders.find((f) => mine.has(key(f)));
+      if (shared) return { title: chats.find((c) => c.id === id)?.title ?? "Another chat", folder: baseName(shared) };
+    }
+    return null;
+  })();
   const keyMissing = keyStatus !== null && !keyStatus.configured;
   const isEmpty = messages.length === 0 && !liveHere;
   const lastIndex = messages.length - 1;
@@ -903,6 +1111,7 @@ export function ChatApp() {
       onGithubSetup={() => (githubState === "no-repos" && project ? openProjectSettings(project.id) : setSettingsOpen(true))}
       mode={prefs.mode}
       gitChanged={isEditingMode(prefs.mode) ? gitChanged : 0}
+      clash={clash}
       searchEnabled={!!settings?.webSearch}
       folders={linked}
       onOpenFolder={() => {
@@ -915,7 +1124,11 @@ export function ChatApp() {
       chatCost={chatCost}
       focusKey={chat?.id ?? "new"}
       placeholder={
-        busyElsewhere ? "Another chat is still replying…" : isEmpty && !activeFolders.length ? (project ? `Message ${project.name}…` : "How can I help you today?") : undefined
+        atCap
+          ? `${MAX_REPLIES} chats are replying. Wait for one to finish…`
+          : liveHere
+            ? "Add something… DeepSeek reads it at its next step"
+            : isEmpty && !activeFolders.length ? (project ? `Message ${project.name}…` : "How can I help you today?") : undefined
       }
     />
   );
@@ -936,7 +1149,8 @@ export function ChatApp() {
           ref={searchRef}
           chats={chats}
           activeId={chat?.id ?? null}
-          streamingId={live?.chatId ?? null}
+          streamingIds={streamingIds}
+          waitingIds={waitingIds}
           search={search}
           onSearch={setSearch}
           onSelect={selectChat}
@@ -1072,7 +1286,7 @@ export function ChatApp() {
               <div className="mx-auto max-w-3xl space-y-7 px-4 pb-10 pt-4 md:px-6">
                 {messages.map((m, i) =>
                   m.role === "user" ? (
-                    <UserBubble key={m.id} message={m} canEdit={!live && !m.id.startsWith("tmp-")} onEdit={(t) => editMessage(m.id, t)} />
+                    <UserBubble key={m.id} message={m} canEdit={!liveHere && !m.id.startsWith("tmp-")} onEdit={(t) => editMessage(m.id, t)} />
                   ) : (
                     <AssistantBlock
                       key={m.id}
@@ -1097,6 +1311,16 @@ export function ChatApp() {
                     onApproveAll={approveAll}
                   />
                 )}
+                {chat &&
+                  (queued[chat.id] ?? []).map((q) => (
+                    <QueuedBubble
+                      key={q.message.id}
+                      message={q.message}
+                      busy={!!q.now}
+                      onNow={() => answerTogether(chat.id)}
+                      onCancel={() => cancelQueued(chat.id, q)}
+                    />
+                  ))}
               </div>
               </ProcsContext.Provider>
               </RunContext.Provider>

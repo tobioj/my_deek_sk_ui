@@ -1,17 +1,30 @@
 // Turns a saved chat into the message list DeepSeek expects.
 import "server-only";
+import { nanoid } from "nanoid";
 import type OpenAI from "openai";
 import { folderTree } from "./files";
 import { DOC_TOOL_NAMES } from "./docs";
 import { EDIT_TOOL_NAMES } from "./edits";
 import { GITHUB_TOOL_NAMES } from "./github";
 import type { Root } from "./roots";
-import { fileBlock } from "./skip";
+import { fileBlock, truncateText } from "./skip";
 import { COMMAND_TOOL_NAMES, type TerminalAccess } from "./terminal";
 import { WORKSPACE_TOOL_NAMES } from "./tools";
 import { WEB_TOOL_NAMES } from "./websearch";
-import { DEFAULT_SYSTEM_PROMPT, readUploadAsDataUrl } from "./storage";
-import { isEditingMode, MODELS, MODES, type AssistantMessage, type Chat, type Mode, type Project, type Settings } from "./types";
+import { DEFAULT_SYSTEM_PROMPT, readUploadAsDataUrl, saveUpload } from "./storage";
+import {
+  isEditingMode,
+  MODELS,
+  MODES,
+  type AssistantMessage,
+  type Attachment,
+  type Chat,
+  type Mode,
+  type ModelId,
+  type Project,
+  type Settings,
+  type UserMessage,
+} from "./types";
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type Part = OpenAI.Chat.Completions.ChatCompletionContentPart;
@@ -204,8 +217,63 @@ async function systemPrompt(chat: Chat, settings: Settings, access: ToolAccess, 
   return prompt + toolsPrompt(access);
 }
 
+// A message you typed, with its attachments: text files are folded in, images saved to uploads.
+export async function buildUserMessage(text: string, attachments: Attachment[], maxChars: number): Promise<UserMessage> {
+  const blocks: string[] = [];
+  const meta: Attachment[] = [];
+  let pasted = 0;
+  for (const a of attachments) {
+    if (a.kind === "image" && a.dataUrl) {
+      const upload = await saveUpload(a.dataUrl);
+      meta.push({ id: a.id, name: a.name, kind: "image", size: a.size, upload });
+    } else if (typeof a.content === "string") {
+      const label = a.kind === "pasted" ? `Pasted text ${++pasted}` : a.name;
+      const { text: body, truncated } = truncateText(a.content, maxChars);
+      blocks.push(fileBlock(label, body));
+      meta.push({ id: a.id, name: label, kind: a.kind, size: a.content.length, truncated: truncated || a.truncated });
+    }
+  }
+  return {
+    id: nanoid(12),
+    role: "user",
+    createdAt: new Date().toISOString(),
+    text,
+    ...(blocks.length ? { files: blocks.join("\n\n") } : {}),
+    attachments: meta,
+  };
+}
+
+// What DeepSeek gets for one of your messages: its attached files, its text, and its images
+// (for models that can see them).
+export async function userContent(m: UserMessage, model: ModelId): Promise<Msg["content"]> {
+  let text = m.files ? `${m.files}\n\n${m.text}` : m.text;
+  const images = m.attachments.filter((a) => a.kind === "image" && a.upload);
+  if (images.length && MODELS[model].vision) {
+    const parts: Part[] = [{ type: "text", text }];
+    for (const img of images) {
+      const url = await readUploadAsDataUrl(img.upload!);
+      if (url) parts.push({ type: "image_url", image_url: { url } });
+    }
+    return parts;
+  }
+  if (images.length) text += `\n\n[${images.length} image(s) attached, but ${MODELS[model].label} can't see images.]`;
+  return text;
+}
+
+// Add a user message to a request, merged into the previous one if that's a user message too
+// (DeepSeek wants roles to alternate).
+export function appendUser(messages: Msg[], content: Msg["content"]) {
+  const prev = messages[messages.length - 1];
+  if (prev?.role !== "user") {
+    messages.push({ role: "user", content } as Msg);
+    return;
+  }
+  const toParts = (c: Msg["content"]): Part[] => (typeof c === "string" ? [{ type: "text", text: c }] : ((c ?? []) as Part[]));
+  prev.content =
+    typeof prev.content === "string" && typeof content === "string" ? `${prev.content}\n\n${content}` : [...toParts(prev.content), ...toParts(content)];
+}
+
 export async function buildMessages(chat: Chat, settings: Settings, access: ToolAccess, project: Project | null = null): Promise<Msg[]> {
-  const vision = MODELS[chat.model].vision;
   const hasFolders = access.roots.length > 0;
   const useTools = hasFolders || access.web || !!access.docs || access.github.length > 0 || !!access.terminal;
   const sendReasoning = useTools && chat.thinking; // DeepSeek requires past reasoning when tools are in play
@@ -219,21 +287,7 @@ export async function buildMessages(chat: Chat, settings: Settings, access: Tool
 
   for (const m of chat.messages) {
     if (m.role === "user") {
-      let text = m.files ? `${m.files}\n\n${m.text}` : m.text;
-      const images = m.attachments.filter((a) => a.kind === "image" && a.upload);
-      if (images.length && vision) {
-        const parts: Part[] = [{ type: "text", text }];
-        for (const img of images) {
-          const url = await readUploadAsDataUrl(img.upload!);
-          if (url) parts.push({ type: "image_url", image_url: { url } });
-        }
-        out.push({ role: "user", content: parts });
-      } else {
-        if (images.length) {
-          text += `\n\n[${images.length} image(s) attached, but ${MODELS[chat.model].label} can't see images.]`;
-        }
-        out.push({ role: "user", content: text });
-      }
+      out.push({ role: "user", content: await userContent(m, chat.model) } as Msg);
       continue;
     }
 

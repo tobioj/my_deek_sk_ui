@@ -78,7 +78,7 @@ security delete-generic-password -s github-token` |
 | **Think** | DeepSeek reasons step by step before answering. Better for hard questions, but slower and uses more tokens. Effort (High / Max) is in the model dropdown. |
 | **Search** | DeepSeek can search the web and cite sources. Only visible when turned on in **Settings → Web search**. Off by default in each chat. |
 | **Token ring** | Hover it to see how full the chat is and what it has cost |
-| **■** | Stops the reply (or press Esc) |
+| **■** | Stops the reply in this chat (or press Esc). Other chats keep going. |
 
 **Files and folders**
 - **Drag** files, images, PDFs, Word docs, or whole folders anywhere onto the window.
@@ -157,6 +157,16 @@ In Edit mode:
 
 **Chats:** saved automatically. Hover a chat in the sidebar → **⋯** to rename, export to Markdown, or delete.
 
+**Sending while it's replying:** you don't have to wait. Type and press Enter while DeepSeek is still working; your message shows with a dashed outline.
+- DeepSeek reads it at its **next step** (for example after it reads a file or runs a command) and carries on with it in mind. If it's writing a plain answer, it finishes that answer and then continues with your message. Several messages sent meanwhile go in together. It costs nothing extra.
+- **Answer together now** cuts off what it's writing and starts again with your message, for one joint answer. The cut-off part is still billed. If DeepSeek is waiting for your approval or running a command, your message goes in right after that.
+- **Cancel** takes the message back into the message box. If you press **Stop**, any waiting message goes back into the box too, so nothing is sent without you.
+
+**Several chats at once:** while one chat is replying, switch to another and keep going. Up to **4 chats** can reply at the same time.
+- In the sidebar, a **blue dot** means a chat is replying and an **amber dot + "waiting"** means it's waiting for you to approve a change or command. A folded project shows the dot too.
+- If two chats in Edit or Auto mode are changing the same folder, the message box warns you, because edits made at the same time can clash.
+- Closing or reloading the window stops replies still being written. Commands in the Running list keep going.
+
 **Keyboard shortcuts**
 
 | Action | Keys |
@@ -196,6 +206,7 @@ This is **not** the app. It's Claude Code (a text-only coding assistant that run
 | No ▶ Run buttons, or DeepSeek can't run commands | The chat must be in a project with **Project settings → Terminal** on, and a project folder switched on in the chat |
 | `npm install` / `git pull` fails in a command | **Project settings → Terminal → Internet for commands** (Mac) |
 | A command says "not permitted" | The sandbox stopped it from going outside the project folders. That's intended. |
+| "4 chats are already replying" | Wait for one to finish, or open one and press ■ / Esc to stop it |
 | Something keeps running after I closed the window | Reopen the app → **● running** (top right) → **Stop**, or `deepseek-chat stop` |
 | App doesn't show in Spotlight | `mdimport ~/Applications/"DeepSeek Chat.app"` |
 | Want to see what went wrong | `deepseek-chat logs` |

@@ -60,6 +60,7 @@ export interface CommandRun {
   internet: boolean;
   background?: boolean; // keeps running (a dev server); shown in the Running list
   procId?: string; // its entry in the Running list
+  startedAt?: string; // when it started running (for the timer on its card)
   exitCode?: number | null;
   durationMs?: number;
   output?: string; // what it printed (start and end, if long)
@@ -153,6 +154,7 @@ export interface AssistantMessage {
   mode?: Mode; // folder mode used for this reply
   changes?: FileChange[]; // files changed in Edit mode
   undone?: boolean; // the person undid those changes
+  cutOff?: boolean; // cut off by "Answer together now" (the rest continues after your message)
   stopped?: boolean;
   error?: string;
 }
@@ -265,6 +267,10 @@ export type StreamEvent =
   | { type: "approval"; id: string; diff?: DiffPreview; command?: CommandRun }
   | { type: "command"; id: string; command: CommandRun } // a command started, finished or was blocked
   | { type: "command_output"; id: string; chunk: string }
+  // Messages you sent while it was working went in: the reply so far (if anything was written) and
+  // your messages are saved in order, and the reply carries on as `next` (null = starting over).
+  | { type: "split"; done: AssistantMessage | null; users: UserMessage[]; next: { id: string; model: ModelId } | null }
+  | { type: "step_cut"; drop: boolean } // "Answer together now" cut off the step in progress
   | { type: "ping" }
   | { type: "usage"; usage: Usage; contextTokens: number }
   | { type: "title"; title: string }

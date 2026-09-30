@@ -23,6 +23,13 @@ export function ownFolders(chat: Pick<Chat, "folders" | "workspace"> | null | un
 // A folder's own name from its full path, on macOS (/) or Windows (\).
 export const baseName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
+// For telling whether two paths are the same folder. Windows ignores upper/lower case and
+// accepts / or \, so "C:\Code\App" and "c:/code/app" match there.
+export function folderKey(p: string, windows: boolean): string {
+  const trimmed = p.replace(/[\\/]+$/, "");
+  return windows ? trimmed.replace(/\//g, "\\").toLowerCase() : trimmed;
+}
+
 // Short, unique names: "api", "web", and "api-2" if two folders are both called "api".
 export function folderNames(paths: string[]): string[] {
   const seen = new Map<string, number>();

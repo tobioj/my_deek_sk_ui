@@ -51,6 +51,7 @@ export interface ComposerProps {
   onPrefs: (p: Partial<{ model: ModelId; thinking: boolean; effort: Effort; webSearch: boolean; github: boolean; mode: Mode }>) => void;
   mode: Mode; // Ask / Plan / Edit / Auto for the project folder
   gitChanged: number; // uncommitted changes in the project folder (0 if none / not a repo)
+  clash?: { title: string; folder: string } | null; // another chat is changing the same folder right now
   webSearch: boolean; // this chat's Search toggle
   github: boolean; // this chat's GitHub toggle
   githubState: "hidden" | "ready" | "no-repos";
@@ -167,7 +168,8 @@ export function Composer(p: ComposerProps) {
 
   const editing = hasFolders && isEditingMode(p.mode);
   const ready = p.attachments.every((a) => a.status !== "loading");
-  const canSend = !p.streaming && ready && (p.text.trim().length > 0 || p.attachments.some((a) => a.status === "ready"));
+  // You can send while DeepSeek is replying too: the message waits for its next step.
+  const canSend = ready && (p.text.trim().length > 0 || p.attachments.some((a) => a.status === "ready"));
 
   const draftTokens =
     Math.ceil(p.text.length / 4) + p.attachments.filter((a) => a.status === "ready").reduce((n, a) => n + estimateAttachmentTokens(a), 0);
@@ -278,6 +280,15 @@ export function Composer(p: ComposerProps) {
               {active.length > 1 ? "Your folders have" : "This folder has"} {p.gitChanged} uncommitted change{p.gitChanged === 1 ? "" : "s"}. Consider
               committing first so you can review
               DeepSeek&apos;s edits in Git. (Each reply also has an Undo button.)
+            </span>
+          </div>
+        )}
+        {editing && p.clash && (
+          <div className="mx-3 mt-2 flex items-start gap-2 rounded-lg bg-warn/10 px-3 py-1.5 text-[12px] text-warn">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <span>
+              &ldquo;{p.clash.title}&rdquo; is also changing <span className="font-medium">{p.clash.folder}</span> right now. Edits made at the same
+              time can clash; Undo warns you if a file was changed again after DeepSeek edited it.
             </span>
           </div>
         )}
@@ -512,7 +523,7 @@ export function Composer(p: ComposerProps) {
             </Popover>
           </div>
 
-          {p.streaming ? (
+          {p.streaming && (
             <button
               type="button"
               onClick={p.onStop}
@@ -522,13 +533,14 @@ export function Composer(p: ComposerProps) {
             >
               <Square size={13} fill="currentColor" />
             </button>
-          ) : (
+          )}
+          {(!p.streaming || canSend) && (
             <button
               type="button"
               onClick={() => p.onSend()}
               disabled={!canSend}
               aria-label="Send"
-              title="Send (Enter)"
+              title={p.streaming ? "Send now: DeepSeek reads it at its next step (Enter)" : "Send (Enter)"}
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-fg transition-opacity hover:brightness-110 disabled:opacity-30"
             >
               <ArrowUp size={17} strokeWidth={2.4} />

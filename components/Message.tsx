@@ -199,6 +199,64 @@ export const UserBubble = memo(function UserBubble({
   );
 });
 
+// A message you sent while DeepSeek was still replying. It goes in at the reply's next step;
+// "Answer together now" cuts off what it's writing so it starts again with this in mind.
+export function QueuedBubble({
+  message,
+  busy,
+  onNow,
+  onCancel,
+}: {
+  message: UserMessage;
+  busy: boolean; // "Answer together now" was clicked
+  onNow: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      {message.attachments.length > 0 && (
+        <div className="flex max-w-[85%] flex-wrap justify-end gap-2 opacity-70">
+          {message.attachments.map((a) => (
+            <AttachmentChip key={a.id} a={a} />
+          ))}
+        </div>
+      )}
+      {message.text && (
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl border border-dashed border-line-strong px-4 py-2.5 text-[15px] leading-relaxed text-fg/80 [overflow-wrap:anywhere]">
+          {message.text}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center justify-end gap-1 text-[12px] text-muted">
+        {busy ? (
+          <span className="inline-flex items-center gap-1.5">
+            <Loader2 size={12} className="animate-spin" /> Starting again with your message…
+          </span>
+        ) : (
+          <>
+            <span className="mr-1">DeepSeek will read this at its next step</span>
+            <button
+              type="button"
+              onClick={onNow}
+              title="Cut off what DeepSeek is writing and start again with this in mind. The cut-off part is still billed."
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-accent hover:bg-hover"
+            >
+              <Zap size={12} /> Answer together now
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              title="Take it back to the message box"
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-hover hover:text-fg"
+            >
+              <X size={12} /> Cancel
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Thinking({ text, active }: { text: string; active: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -501,7 +559,7 @@ function CommandCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [stopping, setStopping] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const outRef = useRef<HTMLPreElement>(null);
   let fallback = "";
   try {
@@ -514,10 +572,11 @@ function CommandCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) 
   const running = r.status === "running" && !r.background;
   useEffect(() => {
     if (!running) return;
-    const start = Date.now();
-    const t = setInterval(() => setElapsed(Date.now() - start), 1000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [running]);
+  // Counted from when it really started, so it's right after you switch chats and come back.
+  const elapsed = r.startedAt ? Math.max(0, now - Date.parse(r.startedAt)) : 0;
   useEffect(() => {
     if (running && outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
   }, [r.output, running]);
@@ -705,6 +764,7 @@ export const AssistantBlock = memo(function AssistantBlock({
           Approve this and switch to Auto (no more asking in this chat)
         </button>
       )}
+      {message.cutOff && <div className="mt-2 text-xs text-faint">Cut off here to take in your new message</div>}
       {message.stopped && <div className="mt-2 text-xs text-faint">Stopped</div>}
       {message.error && (
         <div className="mt-2 flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-soft px-3.5 py-2.5 text-[13.5px] text-danger">

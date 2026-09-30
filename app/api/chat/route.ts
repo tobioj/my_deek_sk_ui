@@ -2,16 +2,16 @@
 // DeepSeek, streams the reply back as newline-delimited JSON, then saves it.
 import { nanoid } from "nanoid";
 import type OpenAI from "openai";
-import { buildMessages, fallbackTitle, generateTitle } from "@/lib/conversation";
+import { appendUser, buildMessages, buildUserMessage, fallbackTitle, generateTitle, userContent } from "@/lib/conversation";
 import { friendlyError, getClient, isAbort } from "@/lib/deepseek";
 import { getSecret } from "@/lib/secrets";
 import { chatLinkedFolders } from "@/lib/folders";
 import { resolveRoots, type Root } from "@/lib/roots";
 import path from "node:path";
-import { fileBlock, truncateText } from "@/lib/skip";
 import { takeEditedCommand, waitForApproval, type Decision } from "@/lib/approvals";
 import { applyEdit, describe, EDIT_TOOL_NAMES, EDIT_TOOLS, isEditError, previewEdit } from "@/lib/edits";
-import { allowDocAutoSave, allowProjectCommand, getChat, getProject, getSettings, saveUpload, updateChat } from "@/lib/storage";
+import { allowDocAutoSave, allowProjectCommand, discardUploads, getChat, getProject, getSettings, updateChat } from "@/lib/storage";
+import { endReply, finishOrTake, setPhase, startReply, takeQueued } from "@/lib/queue";
 import { DOC_TOOL_NAMES, DOC_TOOLS, docEdit, docsFolderPath, docsRoot, runDocReadTool } from "@/lib/docs";
 import { GITHUB_TOOL_NAMES, GITHUB_TOOLS, reposFor, runGithubTool } from "@/lib/github";
 import { costOf } from "@/lib/tokens";
@@ -79,31 +79,6 @@ interface Body {
   messageId?: string;
 }
 
-async function buildUserMessage(text: string, attachments: Attachment[], maxChars: number): Promise<UserMessage> {
-  const blocks: string[] = [];
-  const meta: Attachment[] = [];
-  let pasted = 0;
-  for (const a of attachments) {
-    if (a.kind === "image" && a.dataUrl) {
-      const upload = await saveUpload(a.dataUrl);
-      meta.push({ id: a.id, name: a.name, kind: "image", size: a.size, upload });
-    } else if (typeof a.content === "string") {
-      const label = a.kind === "pasted" ? `Pasted text ${++pasted}` : a.name;
-      const { text: body, truncated } = truncateText(a.content, maxChars);
-      blocks.push(fileBlock(label, body));
-      meta.push({ id: a.id, name: label, kind: a.kind, size: a.content.length, truncated: truncated || a.truncated });
-    }
-  }
-  return {
-    id: nanoid(12),
-    role: "user",
-    createdAt: new Date().toISOString(),
-    text,
-    ...(blocks.length ? { files: blocks.join("\n\n") } : {}),
-    attachments: meta,
-  };
-}
-
 export async function POST(req: Request) {
   let body: Body;
   try {
@@ -145,7 +120,8 @@ export async function POST(req: Request) {
   }
 
   // The reply is saved right after this message, even if another message arrives meanwhile.
-  const replyToId = chat.messages[chat.messages.length - 1].id;
+  // (Messages you send while it's working move this along: see deliver() below.)
+  let replyToId = chat.messages[chat.messages.length - 1].id;
 
   const encoder = new TextEncoder();
   const abort = new AbortController();
@@ -162,15 +138,17 @@ export async function POST(req: Request) {
       };
 
       if (userMessage) send({ type: "user", message: userMessage });
-      const assistant: AssistantMessage = {
+      const newAssistant = (): AssistantMessage => ({
         id: nanoid(12),
         role: "assistant",
         createdAt: new Date().toISOString(),
         model: chat.model,
         steps: [],
         usage: { promptTokens: 0, completionTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0, reasoningTokens: 0, cost: 0 },
-      };
+      });
+      let assistant = newAssistant();
       send({ type: "start", id: assistant.id, model: chat.model });
+      startReply(chat.id); // from now on, messages you send in this chat wait for the next step
 
       let client: OpenAI | null = null;
       try {
@@ -206,6 +184,32 @@ export async function POST(req: Request) {
         ];
         const useTools = tools.length > 0;
         const messages = await buildMessages(chat, settings, { roots, web, mode, docs: docsPath, github: github ? repos : [], terminal }, project);
+
+        // Messages you sent while DeepSeek was working: save the reply so far and your messages in
+        // order, then let it carry on with them in mind. If nothing was written yet (only
+        // unfinished thinking), it simply starts again and answers everything together.
+        const deliver = async (users: UserMessage[]) => {
+          const visible = assistant.steps.some((s) => s.content || s.toolCalls?.length);
+          const part = visible ? { ...assistant, steps: assistant.steps.filter((s) => s.content || s.reasoning || s.toolCalls?.length) } : null;
+          const after = replyToId;
+          await updateChat(chat.id, (c) => {
+            const i = c.messages.findIndex((m) => m.id === after);
+            if (i === -1) return; // the message was edited away while we were replying
+            c.messages.splice(i + 1, 0, ...(part ? [part] : []), ...users);
+            c.updatedAt = new Date().toISOString();
+          }).catch(() => null);
+          replyToId = users[users.length - 1].id;
+          if (part) {
+            assistant = newAssistant();
+            if (root) assistant.mode = mode;
+            send({ type: "split", done: part, users, next: { id: assistant.id, model: chat.model } });
+          } else {
+            assistant.steps = [];
+            send({ type: "split", done: null, users, next: null });
+          }
+          for (const u of users) appendUser(messages, await userContent(u, chat.model));
+        };
+        let incoming: UserMessage[] = []; // messages to hand DeepSeek before its next step
 
         // Run one command DeepSeek asked for (after approval, if it needed one), streaming its output.
         const runCommandJob = async (call: ToolCall, prep: Prepared, decision: Decision | undefined): Promise<Outcome> => {
@@ -248,7 +252,7 @@ export async function POST(req: Request) {
               by: "deepseek",
               signal: abort.signal,
               onStart: (procId) => {
-                call.command = { ...run, status: "running", procId };
+                call.command = { ...run, status: "running", procId, startedAt: new Date().toISOString() };
                 send({ type: "command", id: call.id, command: call.command });
               },
               onOutput: (chunk) => {
@@ -269,6 +273,11 @@ export async function POST(req: Request) {
         };
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+          // A break between steps: anything you sent meanwhile goes in now.
+          const waiting = incoming.length ? incoming : round > 0 ? takeQueued(chat.id) : [];
+          incoming = [];
+          if (waiting.length) await deliver(waiting);
+
           const step: AssistantStep = { content: "" };
           assistant.steps.push(step);
           send({ type: "step" });
@@ -284,39 +293,73 @@ export async function POST(req: Request) {
           else params.max_tokens = 32_000;
           if (useTools) params.tools = tools;
 
-          const response = (await client.chat.completions.create(
-            params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-            { signal: abort.signal },
-          )) as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
+          // Its own stop switch, so "Answer together now" can cut off just this step.
+          const stepAbort = new AbortController();
+          const stopStep = () => stepAbort.abort();
+          abort.signal.addEventListener("abort", stopStep, { once: true });
+          setPhase(chat.id, "model", stepAbort);
 
           const pending = new Map<number, { id: string; name: string; args: string }>();
           let finish: string | null = null;
           let usage: Record<string, unknown> | null = null;
 
-          for await (const chunk of response) {
-            if (chunk.usage) usage = chunk.usage as unknown as Record<string, unknown>;
-            const choice = chunk.choices?.[0];
-            if (!choice) continue;
-            const delta = choice.delta as { content?: string | null; reasoning_content?: string | null; tool_calls?: OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta.ToolCall[] };
-            if (delta.reasoning_content) {
-              step.reasoning = (step.reasoning ?? "") + delta.reasoning_content;
-              send({ type: "reasoning", delta: delta.reasoning_content });
+          try {
+            const response = (await client.chat.completions.create(
+              params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+              { signal: stepAbort.signal },
+            )) as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
+
+            for await (const chunk of response) {
+              if (chunk.usage) usage = chunk.usage as unknown as Record<string, unknown>;
+              const choice = chunk.choices?.[0];
+              if (!choice) continue;
+              const delta = choice.delta as { content?: string | null; reasoning_content?: string | null; tool_calls?: OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta.ToolCall[] };
+              if (delta.reasoning_content) {
+                step.reasoning = (step.reasoning ?? "") + delta.reasoning_content;
+                send({ type: "reasoning", delta: delta.reasoning_content });
+              }
+              if (delta.content) {
+                step.content += delta.content;
+                send({ type: "text", delta: delta.content });
+              }
+              for (const tc of delta.tool_calls ?? []) {
+                const acc = pending.get(tc.index) ?? { id: "", name: "", args: "" };
+                if (tc.id) acc.id = tc.id;
+                if (tc.function?.name) acc.name += tc.function.name;
+                if (tc.function?.arguments) acc.args += tc.function.arguments;
+                pending.set(tc.index, acc);
+              }
+              if (choice.finish_reason) finish = choice.finish_reason;
             }
-            if (delta.content) {
-              step.content += delta.content;
-              send({ type: "text", delta: delta.content });
-            }
-            for (const tc of delta.tool_calls ?? []) {
-              const acc = pending.get(tc.index) ?? { id: "", name: "", args: "" };
-              if (tc.id) acc.id = tc.id;
-              if (tc.function?.name) acc.name += tc.function.name;
-              if (tc.function?.arguments) acc.args += tc.function.arguments;
-              pending.set(tc.index, acc);
-            }
-            if (choice.finish_reason) finish = choice.finish_reason;
+          } catch (e) {
+            if (!stepAbort.signal.aborted || abort.signal.aborted) throw e; // a real error, or Stop
+          } finally {
+            abort.signal.removeEventListener("abort", stopStep);
+            setPhase(chat.id, "tools");
           }
           // The SDK can end the stream quietly when aborted, so check explicitly.
           if (abort.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+
+          if (stepAbort.signal.aborted) {
+            // "Answer together now": keep what it had written (DeepSeek sees it too), drop anything
+            // unfinished, and start again with your messages. (A cut-off step is still billed.)
+            incoming = takeQueued(chat.id);
+            if (!incoming.length) {
+              assistant.steps.pop(); // you took the message back meanwhile: just redo this step
+              send({ type: "step_cut", drop: true });
+              continue;
+            }
+            step.toolCalls = undefined;
+            if (step.content) {
+              step.content = `${step.content.trimEnd()} …`;
+              assistant.cutOff = true;
+              const m: Record<string, unknown> = { role: "assistant", content: step.content };
+              if (chat.thinking) m.reasoning_content = step.reasoning ?? "";
+              messages.push(m as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+            } else step.reasoning = undefined;
+            send({ type: "step_cut", drop: false });
+            continue;
+          }
 
           if (usage) {
             const n = (k: string) => (typeof usage![k] === "number" ? (usage![k] as number) : 0);
@@ -444,6 +487,7 @@ export async function POST(req: Request) {
                   else send({ type: "approval", id: toolCalls[j.i].id, diff: previews.get(j.i)! });
                 }
                 const ping = setInterval(() => send({ type: "ping" }), 15_000);
+                setPhase(chat.id, "approval");
                 try {
                   const results = await Promise.all(
                     needsAsk.map((j) => waitForApproval(chat.id, toolCalls[j.i].id, abort.signal, j.command ? "command" : "edit")),
@@ -451,6 +495,7 @@ export async function POST(req: Request) {
                   needsAsk.forEach((j, k) => decisions.set(j.i, results[k]));
                 } finally {
                   clearInterval(ping);
+                  setPhase(chat.id, "tools");
                 }
               }
               for (const j of ready) {
@@ -515,6 +560,15 @@ export async function POST(req: Request) {
           } else if (finish === "insufficient_system_resource") {
             throw new Error("DeepSeek ran out of capacity mid-reply. Retry in a moment.");
           }
+          // Messages you sent while it was writing this answer: carry on with them right away.
+          const more = finishOrTake(chat.id);
+          if (more.length) {
+            const m: Record<string, unknown> = { role: "assistant", content: step.content };
+            if (chat.thinking) m.reasoning_content = step.reasoning ?? "";
+            messages.push(m as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+            incoming = more;
+            continue;
+          }
           break;
         }
       } catch (err) {
@@ -525,6 +579,10 @@ export async function POST(req: Request) {
           send({ type: "error", message: assistant.error });
         }
       }
+
+      // Anything still waiting wasn't delivered (Stop, or an error): the browser puts it back in
+      // the message box, so forget it here.
+      await discardUploads(endReply(chat.id)).catch(() => {});
 
       // Drop empty steps (e.g. a step that was cancelled before producing anything).
       assistant.steps = assistant.steps.filter((s) => s.content || s.reasoning || s.toolCalls?.length);

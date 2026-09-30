@@ -221,6 +221,13 @@ export async function saveUpload(dataUrl: string): Promise<string> {
   return name;
 }
 
+// Delete the images of messages that were never sent (taken back, or never delivered).
+export async function discardUploads(messages: { attachments: { upload?: string }[] }[]): Promise<void> {
+  for (const m of messages) {
+    for (const a of m.attachments) if (a.upload) await fs.rm(path.join(UPLOADS_DIR, path.basename(a.upload)), { force: true });
+  }
+}
+
 export async function readUploadAsDataUrl(name: string): Promise<string | null> {
   const safe = path.basename(name);
   const ext = path.extname(safe).slice(1);
