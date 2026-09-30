@@ -1,25 +1,92 @@
 # DeepSeek Chat
 
-A personal, Claude-desktop-style chat app for the DeepSeek API. It runs only on your Mac.
+A personal, Claude-desktop-style chat app for the DeepSeek API. It runs on your own computer (Mac or Windows) and only that computer can reach it.
 
 **Quick reference for every command: [CHEATSHEET.md](CHEATSHEET.md)**
 
-## Open it
+## Install and run
 
-- **Spotlight / Dock:** open **DeepSeek Chat** (in `~/Applications`), or
-- **Terminal:** run `deepseek-chat`
+You need **Node.js 20.9 or newer** (the LTS version from [nodejs.org](https://nodejs.org)) and **Git**. The app opens in its own Chrome window (or Edge on Windows); without either, it opens in your default browser.
 
-The first launch builds the app (about 30 seconds). After that it opens instantly in its own Chrome window.
-Closing the window leaves a small background server running so the app reopens instantly (commands you started keep running too, in the app's Running list).
-Other commands: `deepseek-chat status` (also lists running commands), `deepseek-chat stop` (stops them and the server), `deepseek-chat restart`, `deepseek-chat logs`.
+The everyday way to run it is the `deepseek-chat` command. It builds the app when the code has changed, runs it in the background, and opens its window. Its subcommands are the same on both systems:
 
-### On Windows
+| Command | What it does |
+|---|---|
+| `deepseek-chat` | Starts the app if needed and opens its window |
+| `deepseek-chat status` | Shows whether it's running, and any commands still running |
+| `deepseek-chat stop` | Stops every running command, then the app |
+| `deepseek-chat restart` | Stops it, rebuilds if the code changed, starts it again |
+| `deepseek-chat logs` | Shows the app's log live (Ctrl + C to leave) |
 
-From the app folder in PowerShell: `npm install`, then `powershell -ExecutionPolicy Bypass -File scripts\windows\install.ps1`. That adds a **DeepSeek Chat** shortcut (Desktop and Start menu) and the `deepseek-chat` command, with the same subcommands as on the Mac. Keys are stored encrypted with your Windows login, and the folder and save dialogs are Windows' own.
+The first launch builds the app (about a minute). After that it opens instantly. Closing the window leaves the app running in the background so it reopens instantly (commands you started keep running too, in the app's Running list).
+
+### Windows
+
+**First time**, in PowerShell or Command Prompt. Put the app somewhere permanent (not Downloads): the shortcut, the command and your saved chats (in its `data` folder) all live there.
+
+```powershell
+git clone https://github.com/tobioj/my_deek_sk_ui.git
+cd my_deek_sk_ui
+npm ci
+powershell -ExecutionPolicy Bypass -File scripts\windows\install.ps1
+```
+
+`install.ps1` adds a **DeepSeek Chat** shortcut to your Desktop and Start menu and the `deepseek-chat` command. Then open **DeepSeek Chat**, or run `deepseek-chat` in a **new** window. Paste your API key in **Settings**; it's stored encrypted with your Windows login.
+
+- **"'deepseek-chat' is not recognized"**: the setup hasn't been run yet, or the window was open before it ran. Close every terminal window (Windows Terminal completely, since new tabs keep the old settings) and open a new one. Or, from the app folder, run the launcher directly: `scripts\windows\deepseek-chat.cmd`.
+- If you downloaded the code as a ZIP instead of `git clone`, `git pull` won't work in that folder. Clone it to get updates.
+
+**Getting updates** (stop the app first: Windows locks the files of a running app, so `npm ci` would fail):
+
+```powershell
+deepseek-chat stop
+git pull
+npm ci
+deepseek-chat
+```
+
+### Mac
+
+**First time**, in Terminal:
+
+```bash
+git clone https://github.com/tobioj/my_deek_sk_ui.git
+cd my_deek_sk_ui
+npm ci
+zsh scripts/mac/install.sh
+```
+
+`install.sh` adds the `deepseek-chat` command (in `~/.local/bin`, linked to `scripts/mac/deepseek-chat`, so `git pull` keeps it up to date) and a **DeepSeek Chat** app in `~/Applications`, which you can open from Spotlight, Launchpad or the Dock. Then open **DeepSeek Chat**, or run `deepseek-chat` in a new Terminal window. Paste your API key in **Settings**; it's stored in the macOS Keychain. Running the setup again is safe.
+
+**Getting updates:**
+
+```bash
+deepseek-chat stop
+git pull
+npm ci
+deepseek-chat
+```
+
+### Without `deepseek-chat` (Mac or Windows)
+
+```bash
+npm ci
+npm run build
+npm start
+```
+
+Then open http://127.0.0.1:3456. It runs only while that terminal stays open (Ctrl + C stops it, along with any commands it started), and you need `npm run build` again after every update.
+
+| Command | What it does |
+|---|---|
+| `npm ci` | Installs exactly the package versions in `package-lock.json` (a clean install) |
+| `npm run build` | Builds the app. Needed before `npm start`, and after every update |
+| `npm start` | Runs the built app at http://127.0.0.1:3456 |
+| `npm run dev` | Development version with live reload at http://127.0.0.1:3455 |
 
 ## Your API key
 
-The key lives in the macOS Keychain, never in a file and never in the browser. Set it either way:
+On Windows, paste it in **Settings** (it's stored encrypted with your Windows login). On the Mac, the key lives in the macOS Keychain, never in a file and never in the browser. Set it either way:
 
 - In the app: **Settings → DeepSeek API key → Save key** (it's tested against DeepSeek right away), or
 - In Terminal: `security add-generic-password -U -a "$USER" -s deepseek-api-key -w` (it asks you to paste the key)

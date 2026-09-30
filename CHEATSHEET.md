@@ -25,16 +25,20 @@ Everything you need, in one place. Type the commands in **Terminal**.
 
 The app lives at **http://127.0.0.1:3456** and is only reachable from your Mac.
 
+**Setting it up on another Mac:** in the app folder, run `npm ci`, then `zsh scripts/mac/install.sh`. That adds the `deepseek-chat` command and the **DeepSeek Chat** app.
+
 ## 2b. On Windows
 
 One-time setup, from the app folder in PowerShell:
 
 ```
-npm install
+npm ci
 powershell -ExecutionPolicy Bypass -File scripts\windows\install.ps1
 ```
 
-This adds **DeepSeek Chat** to your Desktop and Start menu, and the `deepseek-chat` command to new terminals. After that, the same commands as on the Mac work: `deepseek-chat`, `deepseek-chat start`, `status`, `stop`, `restart`, `logs`. The app opens in its own Chrome or Edge window.
+This adds **DeepSeek Chat** to your Desktop and Start menu, and the `deepseek-chat` command to new terminals. If `deepseek-chat` "is not recognized", close every terminal window and open a new one, or run `scripts\windows\deepseek-chat.cmd` from the app folder.
+
+To get updates: `deepseek-chat stop`, then `git pull`, then `npm ci`, then `deepseek-chat` (it rebuilds). Stop it first: Windows locks the files of a running app, so `npm ci` would fail. After that, the same commands as on the Mac work: `deepseek-chat`, `deepseek-chat start`, `status`, `stop`, `restart`, `logs`. The app opens in its own Chrome or Edge window.
 
 - **Keys** are saved encrypted with your Windows login (Windows' equivalent of the Keychain). Paste them in **Settings**.
 - **Choose folder…** and **Save** use Windows' own dialogs.
@@ -224,7 +228,7 @@ This is **not** the app. It's Claude Code (a text-only coding assistant that run
 | Settings | `…/data/settings.json` |
 | Server logs | `…/data/server.log` |
 | App launcher | `~/Applications/DeepSeek Chat.app` |
-| Commands | `~/.local/bin/deepseek-chat` and `~/.local/bin/deepseek` |
+| Commands | `~/.local/bin/deepseek-chat` (set up by `scripts/mac/install.sh`, linked to `scripts/mac/deepseek-chat`) and `~/.local/bin/deepseek` |
 
 **Back up your chats** by copying the `data/` folder.
 

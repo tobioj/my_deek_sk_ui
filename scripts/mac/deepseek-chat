@@ -1,0 +1,92 @@
+#!/bin/zsh
+# deepseek-chat (macOS): start the DeepSeek chat app if it isn't running, and open it in its own window.
+#   deepseek-chat           open the app
+#   deepseek-chat start     start the background server without opening a window
+#   deepseek-chat status    show whether the server is running, and any running commands
+#   deepseek-chat stop      stop the background server (and every command it started)
+#   deepseek-chat restart   restart it (rebuilds if the code changed)
+#   deepseek-chat logs      follow the server log (Ctrl+C to stop)
+# Set up by scripts/mac/install.sh, which links ~/.local/bin/deepseek-chat to this file.
+
+APP_DIR="${0:A:h:h:h}" # scripts/mac/deepseek-chat -> the app folder (following the link)
+PORT=3456
+URL="http://127.0.0.1:$PORT"
+
+# Apps opened from the Dock or Spotlight get a minimal PATH; make sure node and npm are found,
+# including a Node installed with nvm or similar (your login shell's PATH).
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+if ! command -v npm >/dev/null 2>&1; then
+  login_path=$("${SHELL:-/bin/zsh}" -ilc 'printf "%s" "$PATH"' 2>/dev/null < /dev/null)
+  [[ -n "$login_path" ]] && export PATH="$login_path:$PATH"
+fi
+cd "$APP_DIR" || { echo "App folder not found: $APP_DIR" >&2; exit 1; }
+mkdir -p data
+LOG="$APP_DIR/data/server.log"
+
+is_up() { curl -s -o /dev/null --max-time 1 "$URL/api/health"; }
+# Commands started by DeepSeek or ▶ Run that are still running.
+running_commands() { curl -sf --max-time 3 "$URL/api/processes?format=text"; }
+# Stop them through the app, so it can check they're really gone.
+stop_commands() {
+  local list=$(running_commands)
+  [[ -z "$list" ]] && return 0
+  echo "Stopping running commands:"
+  echo "$list" | sed 's/^/  /'
+  curl -s -o /dev/null --max-time 60 -X POST -H "Content-Type: application/json" -d '{"action":"stop_all"}' "$URL/api/processes"
+  local left=$(running_commands)
+  [[ -n "$left" ]] && { echo "Still running (the app will force-stop these as it shuts down):"; echo "$left" | sed 's/^/  /'; }
+  return 0
+}
+# Stop whatever is serving the app's port (the server renames its process, so match by port).
+stop_server() {
+  local pids=$(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null)
+  [[ -z "$pids" ]] && return 1
+  kill $pids 2>/dev/null
+  for i in {1..20}; do is_up || return 0; sleep 0.25; done
+}
+
+case "$1" in
+  status)
+    if is_up; then
+      echo "Running at $URL (pid $(lsof -ti tcp:$PORT -sTCP:LISTEN | head -1))"
+      list=$(running_commands)
+      if [[ -n "$list" ]]; then echo "Running commands (stop them in the app's Running list, or with: deepseek-chat stop):"; echo "$list" | sed 's/^/  /'; else echo "No commands running."; fi
+    else echo "Not running. Start it with: deepseek-chat"; fi
+    exit 0 ;;
+  stop)
+    is_up && stop_commands
+    stop_server && echo "Stopped." || echo "Not running."
+    exit 0 ;;
+  restart)
+    is_up && stop_commands
+    stop_server; sleep 1 ;;
+  logs)
+    [[ -f "$LOG" ]] || { echo "No log yet."; exit 0; }
+    exec tail -f "$LOG" ;;
+esac
+
+if ! is_up; then
+  command -v npm >/dev/null 2>&1 || { echo "Node.js isn't installed (npm wasn't found). Install it from https://nodejs.org, then try again." >&2; exit 1; }
+  # Install the app's packages on first run.
+  if [[ ! -d node_modules ]]; then
+    echo "Installing the app's packages (first run)…"
+    { [[ -f package-lock.json ]] && npm ci || npm install; } > data/install.log 2>&1 || { echo "Installing packages failed — see $APP_DIR/data/install.log" >&2; exit 1; }
+  fi
+  # Build on first run, or when the code changed since the last build.
+  if [[ ! -f .next/BUILD_ID ]] || [[ -n $(find app components lib proxy.ts instrumentation.ts next.config.ts package.json package-lock.json -newer .next/BUILD_ID -print -quit 2>/dev/null) ]]; then
+    echo "Building the app (first run or code changed). This takes about a minute…"
+    npm run build > data/build.log 2>&1 || { echo "Build failed — see $APP_DIR/data/build.log" >&2; exit 1; }
+  fi
+  nohup npm start > "$LOG" 2>&1 < /dev/null &
+  for i in {1..80}; do is_up && break; sleep 0.25; done
+  is_up || { echo "The server didn't start — see $LOG" >&2; exit 1; }
+fi
+
+[[ "$1" == "start" ]] && { echo "Running at $URL"; exit 0; }
+
+# Open as a standalone window (no tabs or address bar) when Chrome is available.
+if [[ -d "/Applications/Google Chrome.app" ]]; then
+  open -na "Google Chrome" --args --app="$URL"
+else
+  open "$URL"
+fi
