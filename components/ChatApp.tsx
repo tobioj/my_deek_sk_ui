@@ -3,7 +3,7 @@
 import clsx from "clsx";
 import { ArrowDown, FolderOpen, KeyRound, Layers, PanelLeftOpen, Paperclip, Settings as SettingsIcon, SlidersHorizontal, SquarePen, Upload } from "lucide-react";
 import { nanoid } from "nanoid";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, fileToAttachment, readEvents, walkDroppedFolder, type DraftAttachment, type LocalFile } from "@/lib/client";
 import { estimateTokens } from "@/lib/tokens";
 import type {
@@ -150,6 +150,10 @@ export function ChatApp() {
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
+  // Where you'd scrolled to in each chat (only kept when you weren't at the bottom), so going
+  // back to a chat puts you where you left off.
+  const scrollPositions = useRef(new Map<string, number>());
+  const restoreScroll = useRef<number | null>(null);
 
   useEffect(() => {
     chatRef.current = chat;
@@ -236,9 +240,12 @@ export function ChatApp() {
           doneAway.current.delete(id);
           if (!c.messages.some((m) => m.id === done.id)) c = { ...c, messages: [...c.messages, done] };
         }
+        // Back where you left off in this chat, or at the bottom if you hadn't scrolled up.
+        const saved = scrollPositions.current.get(c.id);
+        restoreScroll.current = saved ?? null;
+        stickRef.current = saved === undefined;
         setChat(c);
         restoreDraft(c.id);
-        stickRef.current = true;
       } catch {
         setChat(null);
         window.history.replaceState(null, "", "/");
@@ -1003,6 +1010,15 @@ export function ChatApp() {
 
   // ---------- Scrolling ----------
 
+  // Opening a chat: jump to where you left off (or the bottom) before it's drawn, so it never flickers.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const top = restoreScroll.current;
+    restoreScroll.current = null;
+    if (top !== null) el.scrollTop = top;
+    else if (stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [chat?.id]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1015,6 +1031,10 @@ export function ChatApp() {
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     stickRef.current = near;
     setAtBottom(near);
+    if (chat) {
+      if (near) scrollPositions.current.delete(chat.id); // at the bottom: keep following new messages
+      else scrollPositions.current.set(chat.id, el.scrollTop);
+    }
   };
 
   // ---------- Keyboard shortcuts ----------
