@@ -94,7 +94,7 @@ export interface StartOptions {
   projectId: string;
   projectName: string;
   chatId: string | null;
-  by: "deepseek" | "you";
+  by: "deepseek" | "claude" | "you"; // the AI that started it, or you (▶ Run)
   background: boolean;
   sandboxed: boolean;
   timeoutMs: number; // 0 = no limit

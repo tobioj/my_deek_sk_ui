@@ -3,9 +3,19 @@
 import clsx from "clsx";
 import { ArrowDown, FolderOpen, KeyRound, Layers, PanelLeftOpen, Paperclip, Settings as SettingsIcon, SlidersHorizontal, SquarePen, Upload } from "lucide-react";
 import { nanoid } from "nanoid";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, fileToAttachment, readEvents, walkDroppedFolder, type DraftAttachment, type LocalFile } from "@/lib/client";
 import { estimateTokens } from "@/lib/tokens";
+import {
+  aiName,
+  DEEPSEEK_MODELS,
+  isEffort,
+  modelInfoFor,
+  nearestEffort,
+  providerOf,
+  type ModelInfo,
+  type ProviderLimits,
+} from "@/lib/models";
 import type {
   AssistantMessage,
   Attachment,
@@ -29,7 +39,7 @@ import { platformOf, type Platform } from "@/lib/commands";
 import { Composer } from "./Composer";
 import { FolderDialog, rememberFolder, type DroppedFolder } from "./FolderDialog";
 import { RunContext, type RunTarget } from "./Markdown";
-import { AssistantBlock, QueuedBubble, UserBubble } from "./Message";
+import { AssistantBlock, QueuedBubble, SummaryDivider, UserBubble } from "./Message";
 import { ProjectDialog } from "./ProjectDialog";
 import { ProcsContext, RunningButton } from "./RunningList";
 import { SettingsDialog } from "./SettingsDialog";
@@ -44,16 +54,27 @@ type Prefs = {
   hiddenProjectFolders: string[]; // project folders switched off for this chat
   webSearch: boolean;
   github: boolean;
+  code: boolean;
   mode: Mode;
   autoApprove: boolean;
   projectId: string | null;
+};
+type SettingsData = {
+  settings: Settings;
+  key: KeyStatus;
+  claudeKey: KeyStatus;
+  searchKey: KeyStatus;
+  githubKey: KeyStatus;
+  models: { deepseek: ModelInfo[]; claude: ModelInfo[] };
+  defaultSystemPrompt: string;
+  platform: string;
 };
 const EXPANDED_KEY = "expandedProjects";
 // Chats that can reply at the same time. Each reply keeps a connection open, and browsers allow
 // about 6 per app, so this leaves room for everything else (loading chats, the Running list…).
 const MAX_REPLIES = 4;
 // A reply in progress, plus what it may change (for the "another chat is editing this folder" warning).
-type LiveReply = { assistant: AssistantMessage; editing: boolean; folders: string[] };
+type LiveReply = { assistant: AssistantMessage; editing: boolean; folders: string[]; status?: string | null };
 // A message you sent while that chat was still replying. It waits for the reply's next step.
 // text/attachments are kept so it can go back into the message box if it isn't delivered.
 type Queued = { message: UserMessage; text: string; attachments: DraftAttachment[]; now?: boolean };
@@ -64,6 +85,17 @@ const cloneAssistant = (a: AssistantMessage): AssistantMessage => ({
   usage: a.usage ? { ...a.usage } : undefined,
   steps: a.steps.map((s) => ({ ...s, toolCalls: s.toolCalls?.map((c) => ({ ...c, ...(c.command ? { command: { ...c.command } } : {}) })) })),
 });
+
+// A new chat's model: the default from Settings, if its provider has a key; otherwise the other
+// provider's first model. Thinking and effort come from that provider's defaults.
+function newChatModel(d: { settings: Settings; key: KeyStatus | null; claudeKey: KeyStatus | null; models: { deepseek: ModelInfo[]; claude: ModelInfo[] } }) {
+  const s = d.settings;
+  const usable = [...(d.key?.configured ? d.models.deepseek : []), ...(d.claudeKey?.configured ? d.models.claude : [])];
+  const model = !usable.length || usable.some((m) => m.id === s.defaultModel) ? s.defaultModel : usable[0].id;
+  const claude = providerOf(model) === "claude";
+  const effort = claude ? s.claudeEffort : s.effort;
+  return { model, thinking: claude ? s.claudeThinking : s.thinking, effort: isEffort(effort) ? effort : ("high" as const) };
+}
 
 function chatIdFromUrl(): string | null {
   return new URLSearchParams(window.location.search).get("c");
@@ -89,6 +121,9 @@ export function ChatApp() {
   const [chat, setChat] = useState<Chat | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [keyStatus, setKeyStatus] = useState<KeyStatus | null>(null);
+  const [claudeKey, setClaudeKey] = useState<KeyStatus | null>(null);
+  const [models, setModels] = useState<{ deepseek: ModelInfo[]; claude: ModelInfo[] }>({ deepseek: DEEPSEEK_MODELS, claude: [] });
+  const [summarizing, setSummarizing] = useState(false);
   const [searchKey, setSearchKey] = useState<KeyStatus | null>(null);
   const [githubKey, setGithubKey] = useState<KeyStatus | null>(null);
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState("");
@@ -102,6 +137,7 @@ export function ChatApp() {
     hiddenProjectFolders: [],
     webSearch: false,
     github: false,
+    code: false,
     mode: "ask",
     autoApprove: false,
     projectId: null,
@@ -142,7 +178,7 @@ export function ChatApp() {
   const abortRefs = useRef(new Map<string, AbortController>()); // one per chat that's replying
   const doneAway = useRef(new Map<string, AssistantMessage>()); // replies that finished while you were in another chat
   const queuedRef = useRef<Record<string, Queued[]>>({}); // same as `queued`, always current
-  const delivered = useRef(new Set<string>()); // waiting messages DeepSeek has already been given
+  const delivered = useRef(new Set<string>()); // waiting messages the AI has already been given
   const chatsRef = useRef<ChatSummary[]>([]);
   const chatRef = useRef<Chat | null>(null);
   const draftPrefsRef = useRef(draftPrefs);
@@ -205,18 +241,22 @@ export function ChatApp() {
     } catch {}
   }, []);
 
-  const loadSettings = useCallback(async () => {
-    const data = await api<{ settings: Settings; key: KeyStatus; searchKey: KeyStatus; githubKey: KeyStatus; defaultSystemPrompt: string; platform: string }>(
-      "/api/settings",
-    );
+  const applySettingsData = useCallback((data: SettingsData) => {
     setSettings(data.settings);
     setKeyStatus(data.key);
+    setClaudeKey(data.claudeKey);
     setSearchKey(data.searchKey);
     setGithubKey(data.githubKey);
+    setModels(data.models);
     setDefaultSystemPrompt(data.defaultSystemPrompt);
     setPlatform(platformOf(data.platform));
-    return data;
   }, []);
+
+  const loadSettings = useCallback(async () => {
+    const data = await api<SettingsData>("/api/settings");
+    applySettingsData(data);
+    return data;
+  }, [applySettingsData]);
 
   const saveDraft = useCallback(() => {
     const key = chatRef.current?.id ?? (draftPrefsRef.current.projectId ? `new:${draftPrefsRef.current.projectId}` : "new");
@@ -256,16 +296,10 @@ export function ChatApp() {
   );
 
   useEffect(() => {
-    api<{ settings: Settings; key: KeyStatus; searchKey: KeyStatus; githubKey: KeyStatus; defaultSystemPrompt: string; platform: string }>("/api/settings")
+    api<SettingsData>("/api/settings")
       .then((data) => {
-        setSettings(data.settings);
-        setKeyStatus(data.key);
-        setSearchKey(data.searchKey);
-        setGithubKey(data.githubKey);
-        setDefaultSystemPrompt(data.defaultSystemPrompt);
-        setPlatform(platformOf(data.platform));
-        const s = data.settings;
-        setDraftPrefs((p) => ({ ...p, model: s.defaultModel, thinking: s.thinking, effort: s.effort }));
+        applySettingsData(data);
+        setDraftPrefs((p) => ({ ...p, ...newChatModel(data) }));
       })
       .catch(() => showToast("Couldn't load settings."));
     api<ProjectSummary[]>("/api/projects")
@@ -284,7 +318,7 @@ export function ChatApp() {
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [loadChat, showToast]);
+  }, [loadChat, showToast, applySettingsData]);
 
   // Search as you type.
   useEffect(() => {
@@ -331,13 +365,12 @@ export function ChatApp() {
       window.history.pushState(null, "", "/");
       restoreDraft(projectId ? `new:${projectId}` : "new");
       setDraftPrefs((p) => ({
-        model: settings?.defaultModel ?? p.model,
-        thinking: settings?.thinking ?? p.thinking,
-        effort: settings?.effort ?? p.effort,
+        ...(settings ? newChatModel({ settings, key: keyStatus, claudeKey, models }) : { model: p.model, thinking: p.thinking, effort: p.effort }),
         folders: [], // project folders are linked automatically
         hiddenProjectFolders: [],
         webSearch: false,
         github: false,
+        code: false,
         mode: "ask",
         autoApprove: false,
         projectId: projectId,
@@ -350,7 +383,7 @@ export function ChatApp() {
         });
       }
     },
-    [saveDraft, restoreDraft, settings],
+    [saveDraft, restoreDraft, settings, keyStatus, claudeKey, models],
   );
 
   const renameChat = async (id: string, title: string) => {
@@ -382,13 +415,25 @@ export function ChatApp() {
         hiddenProjectFolders: chat.hiddenProjectFolders ?? [],
         webSearch: !!chat.webSearch,
         github: !!chat.github,
+        code: !!chat.code,
         mode: chat.mode === "edit" && chat.autoApprove ? "auto" : (chat.mode ?? "ask"),
         autoApprove: !!chat.autoApprove,
         projectId: chat.projectId ?? null,
       }
     : draftPrefs;
 
-  // The current chat's project, and every folder DeepSeek can use here.
+  // The chat's model, what it can do, and what its provider may do (Settings → limits).
+  const available = useMemo(() => {
+    const list = [...(keyStatus?.configured ? models.deepseek : []), ...(claudeKey?.configured ? models.claude : [])];
+    return list.length ? list : models.deepseek; // no key yet: show DeepSeek's models
+  }, [keyStatus, claudeKey, models]);
+  const info = modelInfoFor(prefs.model, models.claude);
+  const ai = aiName(prefs.model);
+  const limits: ProviderLimits = settings?.limits[info.provider] ?? { folders: true, edit: true, auto: true, commands: true, github: true, docs: true, search: true, code: false };
+  // The mode that applies: Edit and Auto only where this provider may change files.
+  const mode: Mode = isEditingMode(prefs.mode) && !limits.edit ? "ask" : prefs.mode === "auto" && !limits.auto ? "edit" : prefs.mode;
+
+  // The current chat's project, and every folder the AI can use here.
   const currentProjectId = chat ? chat.projectId ?? null : draftPrefs.projectId;
   const project = currentProjectId && activeProject?.id === currentProjectId ? activeProject : null;
   const linked = useMemo(
@@ -412,6 +457,7 @@ export function ChatApp() {
       chatId: runChatId,
       folders,
       platform,
+      ai,
       onStarted: refreshProcs,
       sendOutput: (command, output) => {
         const body = `$ ${command}\n\n${output.length > 100_000 ? "…" + output.slice(-100_000) : output}`;
@@ -422,7 +468,7 @@ export function ChatApp() {
         showToast("Output added to your message.");
       },
     };
-  }, [runChatId, terminalOn, linked, platform, refreshProcs, showToast]);
+  }, [runChatId, terminalOn, linked, platform, ai, refreshProcs, showToast]);
 
   // GitHub button: hidden until set up; in a project, it needs repos picked for that project.
   const githubState: "hidden" | "ready" | "no-repos" = (() => {
@@ -435,10 +481,21 @@ export function ChatApp() {
   })();
 
   const updatePrefs = async (patch: Partial<Prefs>) => {
-    if (patch.webSearch && !searchKey?.configured) {
-      showToast("Add your free Tavily key to use web search.");
+    if (patch.webSearch && providerOf(prefs.model) === "deepseek" && !searchKey?.configured) {
+      showToast("Add your free Tavily key to use web search with DeepSeek.");
       setSettingsOpen(true);
       return;
+    }
+    if (patch.model && settings) {
+      // Another provider: start from that provider's defaults. Same provider: keep the effort if
+      // the new model takes it.
+      const next = modelInfoFor(patch.model, models.claude);
+      if (next.provider !== providerOf(prefs.model)) {
+        const d = next.provider === "claude" ? { thinking: settings.claudeThinking, effort: settings.claudeEffort } : { thinking: settings.thinking, effort: settings.effort };
+        patch = { ...d, ...patch };
+      }
+      const effort = nearestEffort(patch.effort ?? prefs.effort, next.efforts);
+      if (effort) patch = { ...patch, effort };
     }
     const current = chatRef.current;
     if (!current) {
@@ -460,6 +517,7 @@ export function ChatApp() {
               hiddenProjectFolders: saved.hiddenProjectFolders,
               webSearch: saved.webSearch,
               github: saved.github,
+              code: saved.code,
               mode: saved.mode,
               autoApprove: saved.autoApprove,
               projectId: saved.projectId,
@@ -475,12 +533,14 @@ export function ChatApp() {
 
   // ---------- Attachments ----------
 
+  // Claude with Code on: data files (and spreadsheets) also go into its code sandbox.
+  const sandbox = info.provider === "claude" && limits.code && prefs.code;
   const addFiles = useCallback(
     (files: File[]) => {
       for (const file of files) {
         const id = nanoid(10);
         setAttachments((prev) => [...prev, { id, name: file.name, kind: "file", size: file.size, status: "loading" }]);
-        fileToAttachment(file)
+        fileToAttachment(file, file.name, { sandbox })
           .then((a) => setAttachments((prev) => prev.map((x) => (x.id === id ? { ...a, id, status: "ready" } : x))))
           .catch((e: Error) => {
             setAttachments((prev) => prev.map((x) => (x.id === id ? { ...x, status: "error", error: e.message } : x)));
@@ -488,7 +548,7 @@ export function ChatApp() {
           });
       }
     },
-    [],
+    [sandbox],
   );
 
   const addReadyAttachments = (list: Attachment[]) => {
@@ -540,7 +600,7 @@ export function ChatApp() {
     doneAway.current.delete(chatId);
     if (chatRef.current?.id === chatId || !chatRef.current) stickRef.current = true;
     // What this reply may change, for the warning when two chats edit the same folder.
-    const editing = isEditingMode(prefs.mode);
+    const editing = isEditingMode(mode);
     const folders = activeFolders.map((f) => f.path);
     const model = chatRef.current?.id === chatId ? chatRef.current.model : draftPrefsRef.current.model;
     const a: AssistantMessage = { id: `live-${nanoid(8)}`, role: "assistant", createdAt: new Date().toISOString(), model, steps: [] };
@@ -549,7 +609,8 @@ export function ChatApp() {
       return a.steps[a.steps.length - 1];
     };
     let frame = 0;
-    const show = () => setLives((m) => ({ ...m, [chatId]: { assistant: cloneAssistant(a), editing, folders } }));
+    let status: string | null = null;
+    const show = () => setLives((m) => ({ ...m, [chatId]: { assistant: cloneAssistant(a), editing, folders, status } }));
     const flush = () => {
       frame = 0;
       show();
@@ -631,10 +692,10 @@ export function ChatApp() {
           }
           case "step_cut": {
             // "Answer together now" cut off what it was writing.
-            if (ev.drop) a.steps.pop();
+            if (ev.drop) a.steps.splice(Math.max(0, a.steps.length - (ev.count ?? 1)));
             else {
               const s = cur();
-              s.toolCalls = undefined;
+              s.toolCalls = s.toolCalls?.filter((c) => c.server && c.summary !== undefined);
               if (s.content) {
                 s.content = `${s.content.trimEnd()} …`;
                 a.cutOff = true;
@@ -651,10 +712,25 @@ export function ChatApp() {
           case "tool_result":
             for (const s of a.steps) {
               const call = s.toolCalls?.find((c) => c.id === ev.id);
-              if (call) Object.assign(call, { summary: ev.summary, ok: ev.ok, sources: ev.sources, diff: ev.diff ?? call.diff, status: ev.status });
+              if (call)
+                Object.assign(call, {
+                  summary: ev.summary,
+                  ok: ev.ok,
+                  sources: ev.sources ?? call.sources,
+                  diff: ev.diff ?? call.diff,
+                  status: ev.status,
+                  ...(ev.result !== undefined ? { result: ev.result } : {}),
+                  ...(ev.files ? { files: ev.files } : {}),
+                });
             }
             break;
           case "ping":
+            break;
+          case "status":
+            status = ev.text;
+            break;
+          case "summary":
+            setChat((c) => (c && c.id === chatId ? { ...c, summary: ev.summary, extraCost: ev.extraCost } : c));
             break;
           case "usage":
             a.usage = ev.usage;
@@ -718,7 +794,7 @@ export function ChatApp() {
   };
 
   const send = async () => {
-    if (liveHere) return queueMessage(); // still replying: DeepSeek reads it at its next step
+    if (liveHere) return queueMessage(); // still replying: the AI reads it at its next step
     if (!roomForReply()) return;
     const ready = attachments.filter((a) => a.status === "ready");
     const body = {
@@ -778,14 +854,14 @@ export function ChatApp() {
       const d = (await res.json().catch(() => ({}))) as { message?: UserMessage; error?: string };
       if (!res.ok || !d.message) {
         returnToBox(chatId, typed, ready);
-        showToast(res.status === 409 ? "DeepSeek just finished. Press Enter to send your message." : d.error || "Couldn't send that.");
+        showToast(res.status === 409 ? `${ai} just finished. Press Enter to send your message.` : d.error || "Couldn't send that.");
         return;
       }
       if (delivered.current.has(d.message.id)) return; // it already went in
       if (!abortRefs.current.has(chatId)) {
         // The reply ended while this was on its way.
         returnToBox(chatId, typed, ready);
-        showToast("DeepSeek just finished. Press Enter to send your message.");
+        showToast(`${ai} just finished. Press Enter to send your message.`);
         return;
       }
       updateQueued(chatId, (list) => [...list, { message: d.message!, text: typed, attachments: ready }]);
@@ -798,19 +874,19 @@ export function ChatApp() {
   // Take a waiting message back into the message box.
   const cancelQueued = async (chatId: string, q: Queued) => {
     const r = await api<{ ok: boolean }>("/api/chat/queue", { method: "POST", json: { chatId, cancel: q.message.id } }).catch(() => ({ ok: false }));
-    if (!r.ok) return showToast("Too late: DeepSeek has already read it.");
+    if (!r.ok) return showToast(`Too late: ${ai} has already read it.`);
     updateQueued(chatId, (list) => list.filter((x) => x.message.id !== q.message.id));
     returnToBox(chatId, q.text, q.attachments);
   };
 
-  // "Answer together now": cut off what DeepSeek is writing so it starts again with your messages.
+  // "Answer together now": cut off what the AI is writing so it starts again with your messages.
   const answerTogether = async (chatId: string) => {
     updateQueued(chatId, (list) => list.map((x) => ({ ...x, now: true })));
     const r = await api<{ cut: boolean; phase?: string }>("/api/chat/queue", { method: "POST", json: { chatId, now: true } }).catch(() => ({ cut: false, phase: undefined }));
     if (r.cut) return;
     updateQueued(chatId, (list) => list.map((x) => ({ ...x, now: false })));
-    if (r.phase === "approval") showToast("DeepSeek is waiting for your approval. It reads your message right after you decide.");
-    else if (r.phase === "tools") showToast("DeepSeek is in the middle of a step. It reads your message as soon as that's done.");
+    if (r.phase === "approval") showToast(`${ai} is waiting for your approval. It reads your message right after you decide.`);
+    else if (r.phase === "tools") showToast(`${ai} is in the middle of a step. It reads your message as soon as that's done.`);
   };
 
   // Stop the reply in the chat you're looking at (other chats keep going).
@@ -828,7 +904,7 @@ export function ChatApp() {
         const go =
           !ask ||
           window.confirm(
-            `These files were changed again after DeepSeek edited them:\n\n${res.conflicts.join("\n")}\n\nUndo anyway? Those later edits will be lost.`,
+            `These files were changed again after ${ai} edited them:\n\n${res.conflicts.join("\n")}\n\nUndo anyway? Those later edits will be lost.`,
           );
         if (!go) return false;
         res = await api<UndoResult>(`/api/chats/${chatId}/undo`, { method: "POST", json: { messageId, force: true } });
@@ -855,7 +931,7 @@ export function ChatApp() {
       for (const m of [...withChanges].reverse()) if (!(await undoReply(chat.id, m.id))) return false;
       return true;
     }
-    return window.confirm("Keep DeepSeek's changes and continue?");
+    return window.confirm(`Keep ${ai}'s changes and continue?`);
   };
 
   const regenerate = async () => {
@@ -882,7 +958,7 @@ export function ChatApp() {
 
   const saveReply = async (m: AssistantMessage, mode: "new" | "append") => {
     const content = m.steps.map((s) => s.content).filter(Boolean).join("\n\n");
-    const name = `${(chat?.title ?? "").replace(/[^\w\- ]+/g, "").trim() || "DeepSeek reply"}.md`;
+    const name = `${(chat?.title ?? "").replace(/[^\w\- ]+/g, "").trim() || `${aiName(m.model)} reply`}.md`;
     try {
       const r = await api<{ display?: string; cancelled?: boolean }>("/api/save-file", { method: "POST", json: { content, name, mode } });
       if (r.display) showToast(`Saved to ${r.display}`);
@@ -918,9 +994,32 @@ export function ChatApp() {
   };
 
 
+  // "Summarize now": the AI summarizes the chat so far and continues from the summary.
+  const summarizeNow = async () => {
+    const id = chatRef.current?.id;
+    if (!id || summarizing) return;
+    setSummarizing(true);
+    try {
+      const r = await api<{ summary: Chat["summary"]; extraCost: number }>(`/api/chats/${id}/summarize`, { method: "POST" });
+      setChat((c) => (c && c.id === id ? { ...c, summary: r.summary, extraCost: r.extraCost } : c));
+      showToast("Summarized. The earlier messages are still here; the AI continues from the summary.");
+    } catch (e) {
+      showToast((e as Error).message);
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+  // Clicked something that's switched off for this provider.
+  const limitOff = (what: keyof ProviderLimits) => {
+    const label = { folders: "Reading folders", edit: "Changing files", auto: "Auto mode", commands: "Running commands", github: "Reading GitHub", docs: "Saving docs", search: "Web search", code: "Code execution" }[what];
+    showToast(`${label} is off for ${ai}. Turn it on in Settings → ${ai}.`);
+    setSettingsOpen(true);
+  };
+
   // Uncommitted-changes warning for Edit mode.
   useEffect(() => {
-    if (!activeKey || !isEditingMode(prefs.mode) || replyingHere) return;
+    if (!activeKey || !isEditingMode(mode) || replyingHere) return;
     let cancelled = false;
     Promise.all(
       activeKey.split("|").map((root) =>
@@ -932,7 +1031,7 @@ export function ChatApp() {
     return () => {
       cancelled = true;
     };
-  }, [activeKey, prefs.mode, replyingHere, gitCheck]);
+  }, [activeKey, mode, replyingHere, gitCheck]);
 
   // ---------- Folders ----------
 
@@ -1080,7 +1179,8 @@ export function ChatApp() {
     }
     return all.reduce((n, m) => n + (m.role === "user" ? estimateTokens(m.text + (m.files ?? "")) : 0), 0);
   }, [messages, liveHere]);
-  const chatCost = messages.reduce((n, m) => n + (m.role === "assistant" ? m.usage?.cost ?? 0 : 0), 0) + (liveHere?.usage?.cost ?? 0);
+  const chatCost =
+    messages.reduce((n, m) => n + (m.role === "assistant" ? m.usage?.cost ?? 0 : 0), chat?.extraCost ?? 0) + (liveHere?.usage?.cost ?? 0);
 
   const procsNow = useMemo(() => ({ loaded: procs !== null, byId: new Map((procs ?? []).map((p) => [p.id, p])) }), [procs]);
   // Which chats are replying, and which are waiting for you to approve something.
@@ -1097,7 +1197,7 @@ export function ChatApp() {
   const atCap = !liveHere && streamingIds.size >= MAX_REPLIES;
   // Another chat is changing one of this chat's folders right now (both in Edit or Auto mode).
   const clash = (() => {
-    if (!isEditingMode(prefs.mode)) return null;
+    if (!isEditingMode(mode)) return null;
     const key = (p: string) => folderKey(p, platform === "windows");
     const mine = new Set(activeFolders.map((f) => key(f.path)));
     for (const [id, l] of Object.entries(lives)) {
@@ -1107,7 +1207,9 @@ export function ChatApp() {
     }
     return null;
   })();
-  const keyMissing = keyStatus !== null && !keyStatus.configured;
+  const keyMissing = keyStatus !== null && !keyStatus.configured && !claudeKey?.configured;
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  const canSummarize = !!chat && !liveHere && !!lastAssistant && chat.summary?.upto !== lastAssistant.id;
   const isEmpty = messages.length === 0 && !liveHere;
   const lastIndex = messages.length - 1;
 
@@ -1122,17 +1224,23 @@ export function ChatApp() {
       onStop={stop}
       streaming={!!liveHere}
       model={prefs.model}
+      info={info}
+      models={available}
+      ai={ai}
+      limits={limits}
+      onLimitOff={limitOff}
       thinking={prefs.thinking}
       effort={prefs.effort}
+      code={prefs.code && limits.code}
       onPrefs={updatePrefs}
-      webSearch={prefs.webSearch && !!settings?.webSearch}
+      webSearch={prefs.webSearch && limits.search && (info.provider === "claude" || !!settings?.webSearch)}
       github={prefs.github && githubState === "ready"}
       githubState={githubState}
       onGithubSetup={() => (githubState === "no-repos" && project ? openProjectSettings(project.id) : setSettingsOpen(true))}
-      mode={prefs.mode}
-      gitChanged={isEditingMode(prefs.mode) ? gitChanged : 0}
+      mode={mode}
+      gitChanged={isEditingMode(mode) ? gitChanged : 0}
       clash={clash}
-      searchEnabled={!!settings?.webSearch}
+      searchShown={info.provider === "claude" || !!settings?.webSearch}
       folders={linked}
       onOpenFolder={() => {
         setDropped(null);
@@ -1142,12 +1250,15 @@ export function ChatApp() {
       onToggleProjectFolder={toggleProjectFolder}
       contextTokens={contextTokens}
       chatCost={chatCost}
+      summarized={!!chat?.summary}
+      onSummarize={canSummarize ? summarizeNow : undefined}
+      summarizing={summarizing}
       focusKey={chat?.id ?? "new"}
       placeholder={
         atCap
           ? `${MAX_REPLIES} chats are replying. Wait for one to finish…`
           : liveHere
-            ? "Add something… DeepSeek reads it at its next step"
+            ? `Add something… ${ai} reads it at its next step`
             : isEmpty && !activeFolders.length ? (project ? `Message ${project.name}…` : "How can I help you today?") : undefined
       }
     />
@@ -1291,7 +1402,7 @@ export function ChatApp() {
             {keyMissing && (
               <div className="mt-8 flex max-w-lg items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-[13.5px]">
                 <KeyRound size={18} className="shrink-0 text-accent" />
-                <span className="flex-1 text-muted">Add your DeepSeek API key to start chatting. It&apos;s stored securely on this computer.</span>
+                <span className="flex-1 text-muted">Add a DeepSeek or Claude API key to start chatting. It&apos;s stored securely on this computer.</span>
                 <Button variant="primary" onClick={() => setSettingsOpen(true)}>
                   Add key
                 </Button>
@@ -1304,26 +1415,30 @@ export function ChatApp() {
               <RunContext.Provider value={runTarget}>
               <ProcsContext.Provider value={procsNow}>
               <div className="mx-auto max-w-3xl space-y-7 px-4 pb-10 pt-4 md:px-6">
-                {messages.map((m, i) =>
-                  m.role === "user" ? (
-                    <UserBubble key={m.id} message={m} canEdit={!liveHere && !m.id.startsWith("tmp-")} onEdit={(t) => editMessage(m.id, t)} />
-                  ) : (
-                    <AssistantBlock
-                      key={m.id}
-                      message={m}
-                      streaming={false}
-                      isLast={i === lastIndex && !liveHere}
-                      onRegenerate={regenerate}
-                      onOpenSettings={() => setSettingsOpen(true)}
-                      onUndo={m.changes?.length && !m.undone && chat ? () => undoReply(chat.id, m.id) : undefined}
-                      onSave={(mode) => saveReply(m, mode)}
-                    />
-                  ),
-                )}
+                {messages.map((m, i) => (
+                  <Fragment key={m.id}>
+                    {m.role === "user" ? (
+                      <UserBubble message={m} canEdit={!liveHere && !m.id.startsWith("tmp-")} onEdit={(t) => editMessage(m.id, t)} />
+                    ) : (
+                      <AssistantBlock
+                        message={m}
+                        streaming={false}
+                        isLast={i === lastIndex && !liveHere}
+                        onRegenerate={regenerate}
+                        onOpenSettings={() => setSettingsOpen(true)}
+                        onUndo={m.changes?.length && !m.undone && chat ? () => undoReply(chat.id, m.id) : undefined}
+                        onSave={(how) => saveReply(m, how)}
+                      />
+                    )}
+                    {chat?.summary?.upto === m.id && <SummaryDivider summary={chat.summary} ai={ai} />}
+                  </Fragment>
+                ))}
                 {liveHere && (
                   <AssistantBlock
                     message={liveHere}
                     streaming
+                    status={chat ? lives[chat.id]?.status : null}
+                    allowAuto={limits.auto && limits.edit}
                     isLast
                     onRegenerate={regenerate}
                     onOpenSettings={() => setSettingsOpen(true)}
@@ -1336,6 +1451,7 @@ export function ChatApp() {
                     <QueuedBubble
                       key={q.message.id}
                       message={q.message}
+                      ai={ai}
                       busy={!!q.now}
                       onNow={() => answerTogether(chat.id)}
                       onCancel={() => cancelQueued(chat.id, q)}
@@ -1360,7 +1476,7 @@ export function ChatApp() {
                 </button>
               )}
               {composer}
-              <p className="mt-2 text-center text-[11px] text-faint">DeepSeek can make mistakes. Check important info.</p>
+              <p className="mt-2 text-center text-[11px] text-faint">{ai} can make mistakes. Check important info.</p>
             </div>
           </>
         )}
@@ -1371,15 +1487,16 @@ export function ChatApp() {
         onClose={() => setSettingsOpen(false)}
         settings={settings}
         keyStatus={keyStatus}
+        claudeKey={claudeKey}
         searchKey={searchKey}
         githubKey={githubKey}
+        models={models}
         defaultSystemPrompt={defaultSystemPrompt}
-        onSaved={(s, k, sk, gk) => {
+        onKeysChanged={() => loadSettings().catch(() => {})}
+        onSaved={(s) => {
+          // A new default model applies to the chat you're starting (if you haven't sent it yet).
+          if (!chatRef.current && s.defaultModel !== settings?.defaultModel) setDraftPrefs((p) => ({ ...p, ...newChatModel({ settings: s, key: keyStatus, claudeKey, models }) }));
           setSettings(s);
-          setKeyStatus(k);
-          setSearchKey(sk);
-          setGithubKey(gk);
-          if (!chatRef.current) setDraftPrefs((p) => ({ ...p, model: s.defaultModel, thinking: s.thinking, effort: s.effort }));
         }}
       />
       <ProjectDialog
@@ -1388,6 +1505,8 @@ export function ChatApp() {
         allowedRepos={settings?.githubRepos ?? []}
         platform={platform}
         defaultDocsFolder={settings?.docsFolder ?? ""}
+        globalSkillsFolder={settings?.skillsFolder ?? ""}
+        globalSkillsOff={settings?.skillsOff ?? []}
         onClose={() => setProjectDialog({ open: false, project: null })}
         onSaved={(saved) => {
           refreshProjects();

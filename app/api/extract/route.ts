@@ -12,7 +12,8 @@ export async function POST(req: Request) {
       const { text, totalPages } = await extractText(pdf, { mergePages: false });
       const pages = (text as string[]).map((t, i) => `--- Page ${i + 1} ---\n${t.trim()}`).join("\n\n");
       if (!pages.replace(/--- Page \d+ ---/g, "").trim()) {
-        return Response.json({ error: `${file.name} has no selectable text (it may be a scanned image).` }, { status: 422 });
+        // A scan: Claude can still read it (it sees the pages); DeepSeek only gets this note.
+        return Response.json({ text: `(${file.name} has no selectable text: it looks like a scan. Only models that read PDFs themselves, like Claude, can see it.)`, pages: totalPages, scanned: true });
       }
       return Response.json({ text: pages, pages: totalPages });
     }

@@ -1,4 +1,5 @@
-// Turns a saved chat into the message list DeepSeek expects.
+// Turns a saved chat into the message list DeepSeek expects, plus the parts shared with Claude
+// (the system prompt, notes, and saving your messages). Claude's version is in claude-session.ts.
 import "server-only";
 import { nanoid } from "nanoid";
 import type OpenAI from "openai";
@@ -8,13 +9,14 @@ import { EDIT_TOOL_NAMES } from "./edits";
 import { GITHUB_TOOL_NAMES } from "./github";
 import type { Root } from "./roots";
 import { fileBlock, truncateText } from "./skip";
+import { SKILL_TOOL_NAMES, skillsPrompt } from "./skills";
 import { COMMAND_TOOL_NAMES, type TerminalAccess } from "./terminal";
 import { WORKSPACE_TOOL_NAMES } from "./tools";
 import { WEB_TOOL_NAMES } from "./websearch";
-import { DEFAULT_SYSTEM_PROMPT, readUploadAsDataUrl, saveUpload } from "./storage";
+import { DEFAULT_SYSTEM_PROMPT, readUploadAsDataUrl, saveUpload, saveUploadBytes } from "./storage";
+import { DEEPSEEK_MODELS, labelFromId, type Provider } from "./models";
 import {
   isEditingMode,
-  MODELS,
   MODES,
   type AssistantMessage,
   type Attachment,
@@ -23,6 +25,7 @@ import {
   type ModelId,
   type Project,
   type Settings,
+  type SkillInfo,
   type UserMessage,
 } from "./types";
 
@@ -30,13 +33,19 @@ type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type Part = OpenAI.Chat.Completions.ChatCompletionContentPart;
 
 export interface ToolAccess {
-  roots: Root[]; // folders DeepSeek can use (empty = none)
+  provider: Provider;
+  roots: Root[]; // folders the AI can use (empty = none)
   web: boolean; // web search tools are available
-  mode: Mode; // what DeepSeek may do with the folder
-  docs: string | null; // Docs folder DeepSeek may save documents to (any mode)
-  github: string[]; // GitHub repos DeepSeek may read
-  terminal?: TerminalAccess | null; // DeepSeek may run commands in the project's folders
+  mode: Mode; // what the AI may do with the folder
+  docs: string | null; // Docs folder it may save documents to (any mode)
+  github: string[]; // GitHub repos it may read
+  terminal?: TerminalAccess | null; // it may run commands in the project's folders
+  code?: boolean; // Claude: code execution in Anthropic's sandbox
+  skills?: SkillInfo[]; // skills it can open with use_skill
 }
+
+// Claude's own web tools have different names from the app's (Tavily) ones.
+const webToolNames = (access: ToolAccess) => (access.provider === "claude" ? "web_search, web_fetch" : [...WEB_TOOL_NAMES].join(", "));
 
 const NO_COMMANDS = "You can't run commands; tell the user what to run to test.";
 const WITH_COMMANDS = "You can run commands with run_command (see Terminal below): use it to run tests and builds when that helps.";
@@ -109,8 +118,10 @@ function toolsPrompt(access: ToolAccess): string {
     editing ? `- Create, change and delete files: ${names(EDIT_TOOL_NAMES)}` : "",
     access.terminal ? `- Run terminal commands: ${names(COMMAND_TOOL_NAMES)}` : "",
     access.docs ? `- Save documents to the Docs folder: ${names(DOC_TOOL_NAMES)}` : "",
-    access.web ? `- Search and read the web: ${names(WEB_TOOL_NAMES)}` : "",
+    access.web ? `- Search and read the web: ${webToolNames(access)}` : "",
     access.github.length ? `- Read GitHub: ${names(GITHUB_TOOL_NAMES)}` : "",
+    access.code ? "- Run code in a sandbox on Anthropic's servers: code_execution" : "",
+    access.skills?.length ? `- Open your skills: ${names(SKILL_TOOL_NAMES)}` : "",
   ].filter(Boolean);
   if (!lines.length) return "";
   let text =
@@ -127,8 +138,8 @@ function toolsPrompt(access: ToolAccess): string {
   return text;
 }
 
-// When the user switched modes since DeepSeek's last reply, say so right where it'll notice.
-function modeSwitchNote(chat: Chat, access: ToolAccess): string | null {
+// When the user switched modes since the last reply, say so right where it'll notice.
+export function modeSwitchNote(chat: Chat, access: ToolAccess): string | null {
   if (!access.roots.length) return null;
   const last = [...chat.messages].reverse().find((m): m is AssistantMessage => m.role === "assistant");
   if (!last?.mode || last.mode === access.mode) return null;
@@ -148,7 +159,7 @@ function modeSwitchNote(chat: Chat, access: ToolAccess): string | null {
   return `[Note from the app: the user switched this chat from ${from} mode to ${to} mode.]`;
 }
 
-async function systemPrompt(chat: Chat, settings: Settings, access: ToolAccess, project: Project | null): Promise<string> {
+export async function systemPrompt(chat: Chat, settings: Settings, access: ToolAccess, project: Project | null): Promise<string> {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   // An isolated project uses only its own context, plus the app's built-in basics.
   let prompt = (project?.isolated ? DEFAULT_SYSTEM_PROMPT : settings.systemPrompt).trim();
@@ -209,28 +220,64 @@ async function systemPrompt(chat: Chat, settings: Settings, access: ToolAccess, 
   if (access.web) {
     prompt +=
       `\n\n## Web search\n` +
-      `You can search the web with web_search and read a page in full with read_webpage. ` +
+      `You can search the web with web_search and read a page in full with ${access.provider === "claude" ? "web_fetch" : "read_webpage"}. ` +
       `Search when the question involves recent events, current facts, prices, versions or documentation, ` +
       `or when you aren't sure — but answer directly from your own knowledge when that's clearly enough. ` +
       `Cite the pages you used as Markdown links, e.g. [Title](https://example.com).`;
   }
-  return prompt + toolsPrompt(access);
+  if (access.code) {
+    prompt +=
+      `\n\n## Code execution\n` +
+      `You can run code with code_execution: bash and Python (with pandas, numpy, matplotlib and more) in a sandbox on ` +
+      `Anthropic's servers. The sandbox has no internet and can't reach the user's computer or project folders — only files ` +
+      `the user attached to this chat are copied into it. Use it for calculations, data analysis and charts. Files you create ` +
+      `there are offered to the user as downloads in the chat.`;
+  }
+  return prompt + skillsPrompt(access.skills ?? []) + toolsPrompt(access);
 }
 
+const fileData = (dataUrl: string | undefined) => {
+  const m = dataUrl ? /^data:[^;,]*;base64,([\s\S]*)$/.exec(dataUrl) : null;
+  return m ? Buffer.from(m[1], "base64") : null;
+};
+const extOf = (name: string) => name.split(".").pop() ?? "bin";
+
 // A message you typed, with its attachments: text files are folded in, images saved to uploads.
+// PDFs are saved too (Claude reads them itself; DeepSeek gets their text), and so are files meant
+// for Claude's code sandbox.
 export async function buildUserMessage(text: string, attachments: Attachment[], maxChars: number): Promise<UserMessage> {
   const blocks: string[] = [];
+  const pdfBlocks: string[] = [];
   const meta: Attachment[] = [];
   let pasted = 0;
   for (const a of attachments) {
     if (a.kind === "image" && a.dataUrl) {
       const upload = await saveUpload(a.dataUrl);
       meta.push({ id: a.id, name: a.name, kind: "image", size: a.size, upload });
-    } else if (typeof a.content === "string") {
+      continue;
+    }
+    const pdf = a.name.toLowerCase().endsWith(".pdf") ? fileData(a.dataUrl) : null;
+    if (pdf && typeof a.content === "string") {
+      const upload = await saveUploadBytes(pdf, "pdf");
+      const { text: body, truncated } = truncateText(a.content, maxChars);
+      pdfBlocks.push(fileBlock(a.name, body));
+      meta.push({ id: a.id, name: a.name, kind: "file", size: a.content.length, truncated: truncated || a.truncated, upload });
+      continue;
+    }
+    // A file for the code sandbox: kept as it is (a spreadsheet arrives as data, a CSV as text).
+    let upload: string | undefined;
+    if (a.sandbox) {
+      const bytes = fileData(a.dataUrl) ?? (typeof a.content === "string" ? Buffer.from(a.content, "utf8") : null);
+      if (bytes) upload = await saveUploadBytes(bytes, extOf(a.name));
+    }
+    if (typeof a.content === "string") {
       const label = a.kind === "pasted" ? `Pasted text ${++pasted}` : a.name;
       const { text: body, truncated } = truncateText(a.content, maxChars);
       blocks.push(fileBlock(label, body));
-      meta.push({ id: a.id, name: label, kind: a.kind, size: a.content.length, truncated: truncated || a.truncated });
+      meta.push({ id: a.id, name: label, kind: a.kind, size: a.content.length, truncated: truncated || a.truncated, ...(upload ? { upload, sandbox: true } : {}) });
+    } else if (upload) {
+      blocks.push(`=== FILE: ${a.name} ===\n(Attached for the code sandbox: open it there with code. Its contents aren't shown here.)\n=== END FILE ===`);
+      meta.push({ id: a.id, name: a.name, kind: "file", size: a.size, upload, sandbox: true });
     }
   }
   return {
@@ -239,16 +286,29 @@ export async function buildUserMessage(text: string, attachments: Attachment[], 
     createdAt: new Date().toISOString(),
     text,
     ...(blocks.length ? { files: blocks.join("\n\n") } : {}),
+    ...(pdfBlocks.length ? { pdfText: pdfBlocks.join("\n\n") } : {}),
     attachments: meta,
   };
+}
+
+// The start of a summarized chat: what the AI gets in place of the messages it covers.
+export const summaryIntro = (text: string) =>
+  `[Summary of the earlier part of this conversation. The earlier messages were condensed to save space and aren't included any more.]\n\n${text}`;
+
+// Where the AI's view of a chat starts: after its summary, if it has one.
+export function summaryStart(chat: Chat): { start: number; text: string | null } {
+  const s = chat.summary;
+  const i = s ? chat.messages.findIndex((m) => m.id === s.upto) : -1;
+  return i === -1 ? { start: 0, text: null } : { start: i + 1, text: s!.text };
 }
 
 // What DeepSeek gets for one of your messages: its attached files, its text, and its images
 // (for models that can see them).
 export async function userContent(m: UserMessage, model: ModelId): Promise<Msg["content"]> {
-  let text = m.files ? `${m.files}\n\n${m.text}` : m.text;
+  let text = [m.files, m.pdfText, m.text].filter(Boolean).join("\n\n");
   const images = m.attachments.filter((a) => a.kind === "image" && a.upload);
-  if (images.length && MODELS[model].vision) {
+  const info = DEEPSEEK_MODELS.find((x) => x.id === model) ?? DEEPSEEK_MODELS[0];
+  if (images.length && info.vision) {
     const parts: Part[] = [{ type: "text", text }];
     for (const img of images) {
       const url = await readUploadAsDataUrl(img.upload!);
@@ -256,7 +316,7 @@ export async function userContent(m: UserMessage, model: ModelId): Promise<Msg["
     }
     return parts;
   }
-  if (images.length) text += `\n\n[${images.length} image(s) attached, but ${MODELS[model].label} can't see images.]`;
+  if (images.length) text += `\n\n[${images.length} image(s) attached, but ${labelFromId(model)} can't see images.]`;
   return text;
 }
 
@@ -275,17 +335,24 @@ export function appendUser(messages: Msg[], content: Msg["content"]) {
 
 export async function buildMessages(chat: Chat, settings: Settings, access: ToolAccess, project: Project | null = null): Promise<Msg[]> {
   const hasFolders = access.roots.length > 0;
-  const useTools = hasFolders || access.web || !!access.docs || access.github.length > 0 || !!access.terminal;
+  const useTools = hasFolders || access.web || !!access.docs || access.github.length > 0 || !!access.terminal || !!access.skills?.length;
   const sendReasoning = useTools && chat.thinking; // DeepSeek requires past reasoning when tools are in play
-  const available = (name: string) =>
-    (hasFolders && (WORKSPACE_TOOL_NAMES.has(name) || (isEditingMode(access.mode) && EDIT_TOOL_NAMES.has(name)))) ||
+  // Calls Claude's servers ran (web search, code) are never sent back as tool calls here.
+  const available = (name: string, server?: boolean) =>
+    !server &&
+    ((hasFolders && (WORKSPACE_TOOL_NAMES.has(name) || (isEditingMode(access.mode) && EDIT_TOOL_NAMES.has(name)))) ||
     (access.web && WEB_TOOL_NAMES.has(name)) ||
     (!!access.docs && DOC_TOOL_NAMES.has(name)) ||
     (access.github.length > 0 && GITHUB_TOOL_NAMES.has(name)) ||
-    (!!access.terminal && COMMAND_TOOL_NAMES.has(name));
+    (!!access.terminal && COMMAND_TOOL_NAMES.has(name)) ||
+    (!!access.skills?.length && SKILL_TOOL_NAMES.has(name)));
   const out: Msg[] = [{ role: "system", content: await systemPrompt(chat, settings, access, project) }];
 
-  for (const m of chat.messages) {
+  // A long chat that was summarized: the summary stands in for the messages it covers.
+  const { start, text: summary } = summaryStart(chat);
+  if (summary) out.push({ role: "user", content: summaryIntro(summary) });
+
+  for (const m of chat.messages.slice(start)) {
     if (m.role === "user") {
       out.push({ role: "user", content: await userContent(m, chat.model) } as Msg);
       continue;
@@ -297,8 +364,8 @@ export async function buildMessages(chat: Chat, settings: Settings, access: Tool
       // Full fidelity: each step becomes an assistant message, followed by its tool results.
       m.steps.forEach((step, si) => {
         // Calls to tools that are switched off now (e.g. search turned off) become a short note.
-        const calls = (step.toolCalls ?? []).filter((c) => available(c.name));
-        const dropped = (step.toolCalls ?? []).filter((c) => !available(c.name));
+        const calls = (step.toolCalls ?? []).filter((c) => available(c.name, c.server));
+        const dropped = (step.toolCalls ?? []).filter((c) => !available(c.name, c.server));
         const note = dropped.map((c) => `[Earlier: ${c.summary ?? c.name}]`).join("\n");
         const content = [note, step.content, si === m.steps.length - 1 ? undoneNote : ""].filter(Boolean).join("\n\n");
         if (!content && !calls.length && !step.reasoning) return;
@@ -358,24 +425,34 @@ export async function buildMessages(chat: Chat, settings: Settings, access: Tool
   return merged;
 }
 
+// Asking for a chat's title. The exchange goes inside tags so the model names it instead of
+// answering it (otherwise a question about a missing file gets a title like "I don't see any PDF").
+export const TITLE_SYSTEM =
+  "You name conversations. You're given the start of a conversation between a user and an AI assistant, inside <conversation> tags. " +
+  "Don't answer, continue or comment on it. Reply with only a short title for it: 2-6 words, no quotes, no trailing punctuation.";
+export const titleRequest = (userText: string, replyText: string) =>
+  `<conversation>\nUser: ${userText.slice(0, 2000)}\n\nAssistant: ${replyText.slice(0, 1000)}\n</conversation>\n\nTitle for this conversation:`;
+
+// The title from the reply, or null when the model answered instead (the app then uses the first words).
+export function cleanTitle(raw: string): string | null {
+  const title = raw.replace(/^title:\s*/i, "").replace(/^["'“]|["'”]$/g, "").replace(/[.。]$/, "").trim();
+  if (!title || title.split(/\s+/).length > 10 || /^(I|I'm|I'd|I've|Sorry,?)\s/i.test(title)) return null;
+  return title.slice(0, 80);
+}
+
 export async function generateTitle(client: OpenAI, userText: string, replyText: string): Promise<string | null> {
   try {
     const res = await client.chat.completions.create({
       model: "deepseek-flash",
       max_tokens: 30,
       messages: [
-        {
-          role: "system",
-          content: "Write a short title for this conversation. Reply with only the title: 2-6 words, no quotes, no trailing punctuation.",
-        },
-        { role: "user", content: `User: ${userText.slice(0, 2000)}\n\nAssistant: ${replyText.slice(0, 1000)}` },
+        { role: "system", content: TITLE_SYSTEM },
+        { role: "user", content: titleRequest(userText, replyText) },
       ],
       // DeepSeek-specific: skip thinking for this tiny request.
       ...({ thinking: { type: "disabled" } } as object),
     });
-    const raw = res.choices[0]?.message?.content ?? "";
-    const title = raw.replace(/^title:\s*/i, "").replace(/^["'“]|["'”]$/g, "").replace(/[.。]$/, "").trim();
-    return title ? title.slice(0, 80) : null;
+    return cleanTitle(res.choices[0]?.message?.content ?? "");
   } catch {
     return null;
   }

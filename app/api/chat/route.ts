@@ -1,39 +1,33 @@
-// POST /api/chat — adds a message (or edits / regenerates), sends the conversation to
-// DeepSeek, streams the reply back as newline-delimited JSON, then saves it.
+// POST /api/chat — adds a message (or edits / regenerates), sends the conversation to the chat's
+// model (DeepSeek or Claude), streams the reply back as newline-delimited JSON, then saves it.
 import { nanoid } from "nanoid";
-import type OpenAI from "openai";
-import { appendUser, buildMessages, buildUserMessage, fallbackTitle, generateTitle, userContent } from "@/lib/conversation";
-import { friendlyError, getClient, isAbort } from "@/lib/deepseek";
-import { getSecret } from "@/lib/secrets";
-import { chatLinkedFolders } from "@/lib/folders";
-import { resolveRoots, type Root } from "@/lib/roots";
 import path from "node:path";
+import { resolveAccess, type ChatAccess } from "@/lib/access";
 import { takeEditedCommand, waitForApproval, type Decision } from "@/lib/approvals";
-import { applyEdit, describe, EDIT_TOOL_NAMES, EDIT_TOOLS, isEditError, previewEdit } from "@/lib/edits";
-import { allowDocAutoSave, allowProjectCommand, discardUploads, getChat, getProject, getSettings, updateChat } from "@/lib/storage";
+import { claudeTitle, friendlyClaudeError, getClaudeClient, isClaudeAbort } from "@/lib/claude";
+import { ClaudeSession } from "@/lib/claude-session";
+import { buildMessages, buildUserMessage, fallbackTitle, generateTitle, modeSwitchNote } from "@/lib/conversation";
+import { friendlyError, getClient, isAbort } from "@/lib/deepseek";
+import { DOC_TOOL_NAMES, docEdit, docsRoot, runDocReadTool } from "@/lib/docs";
+import { applyEdit, describe, EDIT_TOOL_NAMES, isEditError, previewEdit } from "@/lib/edits";
+import { GITHUB_TOOL_NAMES, runGithubTool } from "@/lib/github";
+import { PROVIDER_NAME } from "@/lib/models";
 import { endReply, finishOrTake, setPhase, startReply, takeQueued } from "@/lib/queue";
-import { DOC_TOOL_NAMES, DOC_TOOLS, docEdit, docsFolderPath, docsRoot, runDocReadTool } from "@/lib/docs";
-import { GITHUB_TOOL_NAMES, GITHUB_TOOLS, reposFor, runGithubTool } from "@/lib/github";
-import { costOf } from "@/lib/tokens";
-import {
-  appPortsFor,
-  approvalNeeded,
-  COMMAND_TOOL_NAMES,
-  COMMAND_TOOLS,
-  commandTool,
-  executeCommand,
-  prepareCommand,
-  recheck,
-  terminalAccess,
-  type Prepared,
-} from "@/lib/terminal";
-import { runTool, WORKSPACE_TOOLS } from "@/lib/tools";
-import { runWebTool, WEB_TOOL_NAMES, WEB_TOOLS } from "@/lib/websearch";
+import type { Root } from "@/lib/roots";
+import { DeepSeekSession, type ModelSession, type StepCallbacks } from "@/lib/session";
+import { allowDocAutoSave, allowProjectCommand, discardUploads, getChat, getProject, getSettings, updateChat } from "@/lib/storage";
+import { modelInfo, summarizeChat, summaryDue } from "@/lib/summarize";
+import { COMMAND_TOOL_NAMES, approvalNeeded, commandTool, executeCommand, prepareCommand, recheck, type Prepared } from "@/lib/terminal";
+import { priceOf } from "@/lib/tokens";
+import { runSkillTool, SKILL_TOOL_NAMES } from "@/lib/skills";
+import { runTool } from "@/lib/tools";
+import { runWebTool, WEB_TOOL_NAMES } from "@/lib/websearch";
 import {
   isEditingMode,
   type AssistantMessage,
   type AssistantStep,
   type Attachment,
+  type Chat,
   type CommandRun,
   type DiffPreview,
   type Mode,
@@ -51,7 +45,7 @@ interface Outcome {
   sources?: ToolCall["sources"];
 }
 
-// Short line for a command's result, e.g. in the notes DeepSeek sees about earlier replies.
+// Short line for a command's result, e.g. in the notes the AI sees about earlier replies.
 function commandSummary(r: CommandRun): string {
   switch (r.status) {
     case "finished":
@@ -79,6 +73,14 @@ interface Body {
   messageId?: string;
 }
 
+const REFUSAL_REASON: Record<string, string> = {
+  cyber: "cybersecurity",
+  bio: "biology",
+  reasoning_extraction: "a request to reveal its reasoning",
+  frontier_llm: "AI model development",
+  general_harms: "possible harm",
+};
+
 export async function POST(req: Request) {
   let body: Body;
   try {
@@ -99,6 +101,7 @@ export async function POST(req: Request) {
     userMessage = await buildUserMessage(text, body.attachments ?? [], settings.maxFileChars);
   }
   const chat = await updateChat(body.chatId, (c) => {
+    let changedAt = -1; // the first message that changed (a summary covering it no longer fits)
     if (action === "send" && userMessage) {
       c.messages.push(userMessage);
     } else if (action === "regenerate") {
@@ -109,6 +112,11 @@ export async function POST(req: Request) {
       const m = c.messages[i] as UserMessage;
       m.text = (body.text ?? "").trim();
       c.messages = c.messages.slice(0, i + 1);
+      changedAt = i;
+    }
+    if (c.summary) {
+      const s = c.messages.findIndex((m) => m.id === c.summary!.upto);
+      if (s === -1 || (changedAt !== -1 && changedAt <= s)) delete c.summary;
     }
     c.updatedAt = new Date().toISOString();
   }).catch((e: Error) => e);
@@ -122,6 +130,8 @@ export async function POST(req: Request) {
   // The reply is saved right after this message, even if another message arrives meanwhile.
   // (Messages you send while it's working move this along: see deliver() below.)
   let replyToId = chat.messages[chat.messages.length - 1].id;
+  const provider = chat.model.startsWith("deepseek") ? "deepseek" : "claude";
+  const ai = PROVIDER_NAME[provider];
 
   const encoder = new TextEncoder();
   const abort = new AbortController();
@@ -150,42 +160,55 @@ export async function POST(req: Request) {
       send({ type: "start", id: assistant.id, model: chat.model });
       startReply(chat.id); // from now on, messages you send in this chat wait for the next step
 
-      let client: OpenAI | null = null;
+      let titleFor: ((seed: string, reply: string) => Promise<string | null>) | null = null;
+      let a: ChatAccess | null = null;
       try {
-        client = await getClient();
-        // Folders DeepSeek can use: the project's (unless switched off here) plus the chat's own.
-        // Folders that were moved or deleted are skipped.
-        const project = chat.projectId ? await getProject(chat.projectId) : null;
-        const roots = await resolveRoots(chatLinkedFolders(chat, project));
+        a = await resolveAccess(chat, settings, req);
+        const { roots, mode, editing, docsPath, repos, github, terminal, web, skills } = a;
         const root = roots.length > 0;
-        // Web search needs the Settings flag, the chat's Search toggle, and a Tavily key.
-        const web = settings.webSearch && !!chat.webSearch && !!(await getSecret("tavily")).key;
-        // Folder modes only apply when a project folder is open.
-        // Older chats stored "Edit + always approve" as a flag; that's Auto mode now.
-        const mode: Mode = root ? (chat.mode === "edit" && chat.autoApprove ? "auto" : (chat.mode ?? "ask")) : "ask";
-        const editing = isEditingMode(mode);
         if (root) assistant.mode = mode;
-        // Docs folder: DeepSeek may save documents there in any mode. Created on first use.
-        const docsPath = docsFolderPath(settings, project);
         let docs: Root | null = null;
         const getDocs = async () => (docs ??= await docsRoot(docsPath!));
-        // GitHub (read-only): the chat's toggle, a token, and repos allowed for this chat.
-        const repos = reposFor(settings, project);
-        const github = !!chat.github && repos.length > 0 && !!(await getSecret("github")).key;
-        // Terminal: only in a project with Terminal on, and only in that project's folders.
-        const terminal = terminalAccess(project, roots, appPortsFor(req));
-        const tools = [
-          ...(root ? WORKSPACE_TOOLS : []),
-          ...(root && editing ? EDIT_TOOLS : []),
-          ...(docsPath ? DOC_TOOLS : []),
-          ...(web ? WEB_TOOLS : []),
-          ...(github ? GITHUB_TOOLS : []),
-          ...(terminal ? COMMAND_TOOLS : []),
-        ];
-        const useTools = tools.length > 0;
-        const messages = await buildMessages(chat, settings, { roots, web, mode, docs: docsPath, github: github ? repos : [], terminal }, project);
+        const info = await modelInfo(chat.model);
 
-        // Messages you sent while DeepSeek was working: save the reply so far and your messages in
+        // A long chat: summarize the earlier messages first, so the reply stays fast and affordable.
+        const upto = summaryDue(chat, settings, info);
+        if (upto) {
+          send({ type: "status", text: "Summarizing earlier messages…" });
+          try {
+            const { summary, cost } = await summarizeChat({ chat, settings, access: a, info, upto, signal: abort.signal });
+            chat.summary = summary;
+            chat.extraCost = (chat.extraCost ?? 0) + cost;
+            const saved = await updateChat(chat.id, (c) => {
+              if (c.messages.some((m) => m.id === upto)) c.summary = summary;
+              c.extraCost = (c.extraCost ?? 0) + cost;
+            });
+            send({ type: "summary", summary, extraCost: saved?.extraCost ?? chat.extraCost });
+          } catch (e) {
+            if (abort.signal.aborted) throw e;
+            // Couldn't summarize: carry on with the full chat.
+          }
+          send({ type: "status", text: null });
+        }
+
+        // The session: DeepSeek's or Claude's way of talking about this chat.
+        let session: ModelSession;
+        let claude: ClaudeSession | null = null;
+        if (provider === "claude") {
+          const client = await getClaudeClient();
+          titleFor = (seed, reply) => claudeTitle(client, seed, reply);
+          // A note about a mode switch goes in once, just before this reply, and stays there.
+          const note = modeSwitchNote(chat, a.access);
+          if (note) assistant.note = note;
+          claude = await ClaudeSession.create({ client, chat, settings, info, access: a.access, project: a.project, tools: a.tools, note });
+          session = claude;
+        } else {
+          const client = await getClient();
+          titleFor = (seed, reply) => generateTitle(client, seed, reply);
+          session = new DeepSeekSession(client, chat, await buildMessages(chat, settings, a.access, a.project), a.tools);
+        }
+
+        // Messages you sent while it was working: save the reply so far and your messages in
         // order, then let it carry on with them in mind. If nothing was written yet (only
         // unfinished thinking), it simply starts again and answers everything together.
         const deliver = async (users: UserMessage[]) => {
@@ -207,11 +230,11 @@ export async function POST(req: Request) {
             assistant.steps = [];
             send({ type: "split", done: null, users, next: null });
           }
-          for (const u of users) appendUser(messages, await userContent(u, chat.model));
+          await session.addUsers(users);
         };
-        let incoming: UserMessage[] = []; // messages to hand DeepSeek before its next step
+        let incoming: UserMessage[] = []; // messages to hand the model before its next step
 
-        // Run one command DeepSeek asked for (after approval, if it needed one), streaming its output.
+        // Run one command the AI asked for (after approval, if it needed one), streaming its output.
         const runCommandJob = async (call: ToolCall, prep: Prepared, decision: Decision | undefined): Promise<Outcome> => {
           call.status = undefined; // commands keep their own status in call.command
           let run = prep.run;
@@ -249,7 +272,7 @@ export async function POST(req: Request) {
               root: prep.root,
               run,
               chatId: chat.id,
-              by: "deepseek",
+              by: provider,
               signal: abort.signal,
               onStart: (procId) => {
                 call.command = { ...run, status: "running", procId, startedAt: new Date().toISOString() };
@@ -278,20 +301,44 @@ export async function POST(req: Request) {
           incoming = [];
           if (waiting.length) await deliver(waiting);
 
-          const step: AssistantStep = { content: "" };
-          assistant.steps.push(step);
+          const head = assistant.steps.length; // this API call's first step
+          assistant.steps.push({ content: "" });
           send({ type: "step" });
+          const cur = () => assistant.steps[assistant.steps.length - 1];
+          const findCall = (id: string) => assistant.steps.flatMap((s) => s.toolCalls ?? []).find((c) => c.id === id);
 
-          const params: Record<string, unknown> = {
-            model: chat.model,
-            messages,
-            stream: true,
-            stream_options: { include_usage: true },
-            thinking: { type: chat.thinking ? "enabled" : "disabled" },
+          const callbacks: StepCallbacks = {
+            onReasoning: (delta) => {
+              const s = cur();
+              s.reasoning = (s.reasoning ?? "") + delta;
+              send({ type: "reasoning", delta });
+            },
+            onText: (delta) => {
+              cur().content += delta;
+              send({ type: "text", delta });
+            },
+            onSegment: () => {
+              assistant.steps.push({ content: "", cont: true });
+              send({ type: "step" });
+            },
+            onServerCall: (call) => {
+              (cur().toolCalls ??= []).push(call);
+              send({ type: "tool_call", call: { ...call } });
+            },
+            onServerResult: (id, patch) => {
+              const call = findCall(id);
+              if (call) Object.assign(call, patch);
+              send({
+                type: "tool_result",
+                id,
+                summary: call?.summary ?? patch.summary ?? "",
+                ok: call?.ok ?? patch.ok ?? true,
+                ...(call?.sources ? { sources: call.sources } : {}),
+                ...(call?.result ? { result: call.result } : {}),
+                ...(call?.files ? { files: call.files } : {}),
+              });
+            },
           };
-          if (chat.thinking) params.reasoning_effort = chat.effort;
-          else params.max_tokens = 32_000;
-          if (useTools) params.tools = tools;
 
           // Its own stop switch, so "Answer together now" can cut off just this step.
           const stepAbort = new AbortController();
@@ -299,38 +346,9 @@ export async function POST(req: Request) {
           abort.signal.addEventListener("abort", stopStep, { once: true });
           setPhase(chat.id, "model", stepAbort);
 
-          const pending = new Map<number, { id: string; name: string; args: string }>();
-          let finish: string | null = null;
-          let usage: Record<string, unknown> | null = null;
-
+          let result: Awaited<ReturnType<ModelSession["stream"]>> | null = null;
           try {
-            const response = (await client.chat.completions.create(
-              params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-              { signal: stepAbort.signal },
-            )) as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
-
-            for await (const chunk of response) {
-              if (chunk.usage) usage = chunk.usage as unknown as Record<string, unknown>;
-              const choice = chunk.choices?.[0];
-              if (!choice) continue;
-              const delta = choice.delta as { content?: string | null; reasoning_content?: string | null; tool_calls?: OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta.ToolCall[] };
-              if (delta.reasoning_content) {
-                step.reasoning = (step.reasoning ?? "") + delta.reasoning_content;
-                send({ type: "reasoning", delta: delta.reasoning_content });
-              }
-              if (delta.content) {
-                step.content += delta.content;
-                send({ type: "text", delta: delta.content });
-              }
-              for (const tc of delta.tool_calls ?? []) {
-                const acc = pending.get(tc.index) ?? { id: "", name: "", args: "" };
-                if (tc.id) acc.id = tc.id;
-                if (tc.function?.name) acc.name += tc.function.name;
-                if (tc.function?.arguments) acc.args += tc.function.arguments;
-                pending.set(tc.index, acc);
-              }
-              if (choice.finish_reason) finish = choice.finish_reason;
-            }
+            result = await session.stream(callbacks, stepAbort.signal);
           } catch (e) {
             if (!stepAbort.signal.aborted || abort.signal.aborted) throw e; // a real error, or Stop
           } finally {
@@ -339,60 +357,74 @@ export async function POST(req: Request) {
           }
           // The SDK can end the stream quietly when aborted, so check explicitly.
           if (abort.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+          const callSteps = assistant.steps.slice(head);
 
-          if (stepAbort.signal.aborted) {
-            // "Answer together now": keep what it had written (DeepSeek sees it too), drop anything
+          if (stepAbort.signal.aborted || !result) {
+            // "Answer together now": keep what it had written (the model sees it too), drop anything
             // unfinished, and start again with your messages. (A cut-off step is still billed.)
             incoming = takeQueued(chat.id);
             if (!incoming.length) {
-              assistant.steps.pop(); // you took the message back meanwhile: just redo this step
-              send({ type: "step_cut", drop: true });
+              assistant.steps.length = head; // you took the message back meanwhile: just redo this step
+              send({ type: "step_cut", drop: true, count: callSteps.length });
               continue;
             }
-            step.toolCalls = undefined;
-            if (step.content) {
-              step.content = `${step.content.trimEnd()} …`;
+            const last = callSteps[callSteps.length - 1];
+            for (const s of callSteps) s.toolCalls = s.toolCalls?.filter((c) => c.server && c.summary !== undefined);
+            if (last.content) {
+              last.content = `${last.content.trimEnd()} …`;
               assistant.cutOff = true;
-              const m: Record<string, unknown> = { role: "assistant", content: step.content };
-              if (chat.thinking) m.reasoning_content = step.reasoning ?? "";
-              messages.push(m as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
-            } else step.reasoning = undefined;
+            } else if (!last.toolCalls?.length) last.reasoning = undefined;
+            session.addAssistant(callSteps, null);
             send({ type: "step_cut", drop: false });
             continue;
           }
 
-          if (usage) {
-            const n = (k: string) => (typeof usage![k] === "number" ? (usage![k] as number) : 0);
-            const prompt = n("prompt_tokens");
-            const completion = n("completion_tokens");
-            const hit = n("prompt_cache_hit_tokens");
-            const miss = usage.prompt_cache_miss_tokens !== undefined ? n("prompt_cache_miss_tokens") : prompt - hit;
-            const details = usage.completion_tokens_details as { reasoning_tokens?: number } | undefined;
-            const reasoning = details?.reasoning_tokens ?? n("reasoning_tokens");
+          const headStep = assistant.steps[head];
+          if (result.raw) headStep.raw = result.raw;
+          if (result.fallback) assistant.fallback = result.fallback;
+          if (result.container && claude) chat.container = result.container;
+          if (result.usage) {
+            const r = result.usage;
             const u = assistant.usage!;
-            u.promptTokens += prompt;
-            u.completionTokens += completion;
-            u.cacheHitTokens += hit;
-            u.cacheMissTokens += miss;
-            u.reasoningTokens += reasoning;
-            u.cost += costOf(chat.model, { cacheHitTokens: hit, cacheMissTokens: miss, completionTokens: completion });
-            assistant.contextTokens = prompt + completion;
+            u.promptTokens += r.prompt;
+            u.completionTokens += r.completion;
+            u.cacheHitTokens += r.hit;
+            u.cacheMissTokens += r.miss;
+            u.reasoningTokens += r.reasoning;
+            if (r.write) u.cacheWriteTokens = (u.cacheWriteTokens ?? 0) + r.write;
+            if (r.searches) u.searches = (u.searches ?? 0) + r.searches;
+            const cost = priceOf(result.model ?? chat.model, { cacheHitTokens: r.hit, cacheMissTokens: r.miss, cacheWriteTokens: r.write, completionTokens: r.completion, searches: r.searches });
+            if (cost === null) u.priceUnknown = true;
+            u.cost += cost ?? 0;
+            assistant.contextTokens = r.context;
             send({ type: "usage", usage: { ...u }, contextTokens: assistant.contextTokens });
           }
 
-          const calls = [...pending.values()].filter((c) => c.name);
-          if (useTools && calls.length) {
-            const toolCalls: ToolCall[] = calls.map((c) => ({ id: c.id || `call_${nanoid(8)}`, name: c.name, args: c.args }));
-            step.toolCalls = toolCalls;
+          const last = cur();
+          if (result.calls.length) {
+            const toolCalls: ToolCall[] = result.calls.map((c) => ({ id: c.id || `call_${nanoid(8)}`, name: c.name, args: c.args }));
+            last.toolCalls = [...(last.toolCalls ?? []), ...toolCalls];
             for (const call of toolCalls) send({ type: "tool_call", call: { ...call } });
+            session.addAssistant(callSteps, result);
 
-            const assistantMsg: Record<string, unknown> = {
-              role: "assistant",
-              content: step.content || null,
-              tool_calls: toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } })),
-            };
-            if (chat.thinking) assistantMsg.reasoning_content = step.reasoning ?? "";
-            messages.push(assistantMsg as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+            // A tool call that was cut off (the reply hit its length limit) or that came with a
+            // declined reply never runs.
+            if (result.finish === "length" || result.finish === "refusal") {
+              const why =
+                result.finish === "length"
+                  ? "this tool call was cut off because the reply hit its length limit, so it didn't run. Try again in smaller pieces."
+                  : "the reply was declined, so this tool call didn't run.";
+              for (const call of toolCalls) {
+                Object.assign(call, { result: `Error: ${why}`, summary: "Didn't run", ok: false });
+                send({ type: "tool_result", id: call.id, summary: "Didn't run", ok: false });
+              }
+              session.addToolResults(toolCalls);
+              if (result.finish === "refusal") {
+                assistant.refusal = result.refusal ?? "unspecified";
+                break;
+              }
+              continue;
+            }
 
             // Reading tools (folders, docs, web, GitHub) run right away, in parallel.
             // File changes (code edits and doc saves) and commands are collected as jobs: they may
@@ -417,10 +449,12 @@ export async function POST(req: Request) {
                   }
                 } else if (DOC_TOOL_NAMES.has(c.name)) {
                   outcomes[i] = docsPath ? await runDocReadTool(c.name, c.args, await getDocs()) : off("Docs folder is off", "the Docs folder is turned off.");
+                } else if (SKILL_TOOL_NAMES.has(c.name)) {
+                  outcomes[i] = skills.length ? await runSkillTool(c.name, c.args, skills) : off("No skills", "there are no skills set up.");
                 } else if (GITHUB_TOOL_NAMES.has(c.name)) {
                   outcomes[i] = github ? await runGithubTool(c.name, c.args, repos) : off("GitHub is off", "GitHub isn't turned on for this chat.");
                 } else if (WEB_TOOL_NAMES.has(c.name)) {
-                  outcomes[i] = web ? await runWebTool(c.name, c.args, abort.signal) : off("Web search is off", "web search is turned off");
+                  outcomes[i] = web && provider === "deepseek" ? await runWebTool(c.name, c.args, abort.signal) : off("Web search is off", "web search is turned off");
                 } else if (COMMAND_TOOL_NAMES.has(c.name)) {
                   if (!terminal) {
                     outcomes[i] = off(
@@ -445,7 +479,7 @@ export async function POST(req: Request) {
             );
 
             // Preview each change, ask for approval where needed, then apply in order.
-            jobs.sort((a, b) => a.i - b.i);
+            jobs.sort((x, y) => x.i - y.i);
             const previews = new Map<number, DiffPreview>();
             for (const job of jobs) {
               if (job.command) continue; // commands have no preview
@@ -464,13 +498,14 @@ export async function POST(req: Request) {
               const decisions = new Map<number, Decision>();
               // Auto mode never asks about file changes. Docs marked "save without asking" don't either.
               // Commands follow their own rules (look-only, Always allow, always-ask, Windows).
-              // (Re-read: "Switch to Auto", "don't ask again" or "Always allow" can happen mid-reply.)
+              // (Re-read: "Switch to Auto", "don't ask again" or "Always allow" can happen mid-reply.
+              // Auto still has to be allowed for this provider in Settings.)
               const [latest, latestSettings, latestProject] = await Promise.all([
                 getChat(chat.id),
                 getSettings(),
                 terminal ? getProject(terminal.project.id) : Promise.resolve(null),
               ]);
-              const autoCode = mode === "auto" || latest?.mode === "auto" || !!latest?.autoApprove;
+              const autoCode = latestSettings.limits[provider].auto && (mode === "auto" || latest?.mode === "auto" || !!latest?.autoApprove);
               const commandMode: Mode = autoCode && isEditingMode(mode) ? "auto" : mode;
               const rules = latestProject?.allowedCommands ?? [];
               const docAbs = (j: (typeof jobs)[number]) => path.join(j.roots[0].abs, previews.get(j.i)!.path);
@@ -547,35 +582,48 @@ export async function POST(req: Request) {
                 ...(call.diff ? { diff: call.diff } : {}),
                 ...(call.status ? { status: call.status } : {}),
               });
-              messages.push({ role: "tool", tool_call_id: call.id, content: o.result });
             });
+            session.addToolResults(toolCalls);
             if (abort.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
             continue;
           }
 
-          if (finish === "length") {
-            const note = "\n\n*[Reply cut off: it hit the maximum length. Say “continue” to get the rest.]*";
-            step.content += note;
+          // Claude's servers paused a long run of searches or code: let it carry on.
+          if (result.finish === "pause") {
+            session.addAssistant(callSteps, result);
+            continue;
+          }
+          if (result.finish === "refusal") {
+            const why = result.refusal ? REFUSAL_REASON[result.refusal] : null;
+            assistant.refusal = result.refusal ?? "unspecified";
+            const note = `${last.content ? "\n\n" : ""}*${ai} declined to answer this${why ? ` (its safety checks flagged ${why})` : ""}. You can rephrase, or switch this chat to another model.*`;
+            last.content += note;
             send({ type: "text", delta: note });
-          } else if (finish === "insufficient_system_resource") {
+            break;
+          }
+          if (result.finish === "length") {
+            const note = "\n\n*[Reply cut off: it hit the maximum length. Say “continue” to get the rest.]*";
+            last.content += note;
+            send({ type: "text", delta: note });
+          } else if (result.finish === "context") {
+            throw new Error(`This chat is too long for ${ai}'s context window. Summarize it (the token meter's menu) or start a new chat.`);
+          } else if (result.finish === "capacity") {
             throw new Error("DeepSeek ran out of capacity mid-reply. Retry in a moment.");
           }
           // Messages you sent while it was writing this answer: carry on with them right away.
           const more = finishOrTake(chat.id);
           if (more.length) {
-            const m: Record<string, unknown> = { role: "assistant", content: step.content };
-            if (chat.thinking) m.reasoning_content = step.reasoning ?? "";
-            messages.push(m as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+            session.addAssistant(callSteps, result);
             incoming = more;
             continue;
           }
           break;
         }
       } catch (err) {
-        if (isAbort(err) || abort.signal.aborted) {
+        if (isAbort(err) || isClaudeAbort(err) || abort.signal.aborted) {
           assistant.stopped = true;
         } else {
-          assistant.error = friendlyError(err);
+          assistant.error = provider === "claude" ? friendlyClaudeError(err) : friendlyError(err);
           send({ type: "error", message: assistant.error });
         }
       }
@@ -584,11 +632,24 @@ export async function POST(req: Request) {
       // the message box, so forget it here.
       await discardUploads(endReply(chat.id)).catch(() => {});
 
-      // Drop empty steps (e.g. a step that was cancelled before producing anything).
-      assistant.steps = assistant.steps.filter((s) => s.content || s.reasoning || s.toolCalls?.length);
+      // Drop empty steps (e.g. a step that was cancelled before producing anything), but keep
+      // Claude's content blocks with the step that follows.
+      const kept: AssistantStep[] = [];
+      for (const s of assistant.steps) {
+        if (s.content || s.reasoning || s.toolCalls?.length) kept.push(s);
+        else if (s.raw) {
+          const next = assistant.steps[assistant.steps.indexOf(s) + 1];
+          if (next?.cont) {
+            next.raw = s.raw;
+            next.cont = false;
+          }
+        }
+      }
+      assistant.steps = kept;
 
-      const saved = await updateChat(chat.id, (c) => {
+      const saved = await updateChat(chat.id, (c: Chat) => {
         const i = c.messages.findIndex((m) => m.id === replyToId);
+        if (chat.container) c.container = chat.container;
         if (i === -1) return; // the message was edited away while we were replying
         c.messages.splice(i + 1, 0, assistant);
         c.updatedAt = new Date().toISOString();
@@ -598,8 +659,9 @@ export async function POST(req: Request) {
       if (saved && saved.title === "New chat") {
         const firstUser = saved.messages.find((m) => m.role === "user") as UserMessage | undefined;
         const reply = assistant.steps.map((s) => s.content).join("\n");
-        const seed = firstUser?.text || firstUser?.attachments.map((a) => a.name).join(", ") || "";
-        let title = client && !assistant.error && reply ? await generateTitle(client, seed, reply) : null;
+        const seed = firstUser?.text || firstUser?.attachments.map((x) => x.name).join(", ") || "";
+        const attached = firstUser?.text && firstUser.attachments.length ? `\n(Attached: ${firstUser.attachments.map((x) => x.name).join(", ")})` : "";
+        let title = titleFor && !assistant.error && reply ? await titleFor(seed + attached, reply) : null;
         title = title || fallbackTitle(seed);
         await updateChat(chat.id, (c) => {
           if (c.title === "New chat") c.title = title!;
@@ -622,3 +684,4 @@ export async function POST(req: Request) {
     },
   });
 }
+

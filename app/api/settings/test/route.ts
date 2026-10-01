@@ -1,5 +1,6 @@
 // POST /api/settings/test?provider=… — checks a key works without spending anything.
-// DeepSeek: lists models. Tavily: reads this month's usage.
+// DeepSeek and Claude: list models (for Claude, this also refreshes the model picker). Tavily: reads this month's usage.
+import { claudeModels, friendlyClaudeError } from "@/lib/claude";
 import { friendlyError, getClient } from "@/lib/deepseek";
 import { githubAccount, githubRepoExists } from "@/lib/github";
 import { tavilyUsage } from "@/lib/websearch";
@@ -12,6 +13,14 @@ export async function POST(req: Request) {
       const repo = new URL(req.url).searchParams.get("repo");
       if (repo) return Response.json({ ok: await githubRepoExists(repo) });
       return Response.json({ ok: true, ...(await githubAccount()) });
+    }
+    if (provider === "anthropic") {
+      try {
+        const models = await claudeModels({ refresh: true });
+        return Response.json({ ok: true, models: models.map((m) => m.id) });
+      } catch (e) {
+        return Response.json({ ok: false, error: friendlyClaudeError(e) });
+      }
     }
     if (provider === "tavily") {
       const usage = await tavilyUsage();

@@ -1,5 +1,5 @@
 "use client";
-// "Add a folder": pick a folder (native dialog or typed path), then either let DeepSeek
+// "Add a folder": pick a folder (native dialog or typed path), then either let the AI
 // explore it with tools, or tick files to attach directly. Also handles dropped folders.
 import clsx from "clsx";
 import { AlertTriangle, Compass, FolderOpen, Loader2, Paperclip } from "lucide-react";
@@ -172,7 +172,7 @@ function FolderDialogBody({ open, onClose, dropped, onAttach, onSetWorkspace }: 
             <span className="mr-auto min-w-0 flex-1 text-[12.5px] leading-snug text-muted">
               {checked.size} file{checked.size === 1 ? "" : "s"} · ~{formatTokens(selectedTokens)} tokens
               {selectedTokens > 300_000 && (
-                <span className="block text-warn" title="Attaching this much is slow and costly. Letting DeepSeek explore reads only the files it needs.">
+                <span className="block text-warn" title="Attaching this much is slow and costly. Letting the AI explore reads only the files it needs.">
                   Large: exploring is cheaper
                 </span>
               )}
@@ -183,7 +183,7 @@ function FolderDialogBody({ open, onClose, dropped, onAttach, onSetWorkspace }: 
             </Button>
             {scan && (
               <Button variant="primary" onClick={explore} disabled={!!busy}>
-                <Compass size={14} /> Let DeepSeek explore it
+                <Compass size={14} /> Let the AI explore it
               </Button>
             )}
           </>
@@ -193,7 +193,7 @@ function FolderDialogBody({ open, onClose, dropped, onAttach, onSetWorkspace }: 
       {!reviewing && (
         <div className="space-y-4">
           <p className="text-[13.5px] leading-relaxed text-muted">
-            Choose a folder on this computer. You can then let DeepSeek <b className="text-fg">explore it on its own</b> (it reads whatever
+            Choose a folder on this computer. You can then let the AI <b className="text-fg">explore it on its own</b> (it reads whatever
             files it needs, the way Claude Code does) or <b className="text-fg">attach specific files</b> to your message.
           </p>
           <Button variant="primary" onClick={browse} disabled={!!busy} className="h-10 w-full text-[14px]">
@@ -243,13 +243,13 @@ function FolderDialogBody({ open, onClose, dropped, onAttach, onSetWorkspace }: 
         <div className="space-y-3">
           {scan && (
             <div className="rounded-xl bg-accent-soft px-3.5 py-2.5 text-[13px] leading-relaxed text-accent">
-              <b>Recommended:</b> “Let DeepSeek explore it” gives DeepSeek read-only access to this folder so it opens the files it needs,
+              <b>Recommended:</b> “Let the AI explore it” gives the AI read-only access to this folder so it opens the files it needs,
               without you picking them. Use “Attach selected” to send specific files with your next message.
             </div>
           )}
           {dropped && (
             <div className="rounded-xl bg-surface-2 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted">
-              Want DeepSeek to explore this folder itself instead? Use <b>+ → Add a folder…</b> and choose it there — browsers
+              Want the AI to explore this folder itself instead? Use <b>+ → Add a folder…</b> and choose it there — browsers
               don&apos;t reveal a dropped folder&apos;s location.
             </div>
           )}

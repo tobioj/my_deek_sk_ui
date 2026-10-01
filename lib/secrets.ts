@@ -63,11 +63,12 @@ async function saveWindows(service: string, value: string): Promise<void> {
   await fs.writeFile(dpapiFile(service), encrypted);
 }
 
-export type SecretName = "deepseek" | "tavily" | "github";
+export type SecretName = "deepseek" | "anthropic" | "tavily" | "github";
 
 const SECRETS: Record<SecretName, { service: string; env: string; pattern: RegExp; label: string }> = {
   // Same Keychain entry the `deepseek` terminal command uses.
   deepseek: { service: "deepseek-api-key", env: "DEEPSEEK_API_KEY", pattern: /^[A-Za-z0-9_\-.]{10,200}$/, label: "DeepSeek API key" },
+  anthropic: { service: "anthropic-api-key", env: "ANTHROPIC_API_KEY", pattern: /^[A-Za-z0-9_\-]{20,300}$/, label: "Claude API key" },
   tavily: { service: "tavily-api-key", env: "TAVILY_API_KEY", pattern: /^[A-Za-z0-9_\-.]{10,200}$/, label: "Tavily API key" },
   github: { service: "github-token", env: "GITHUB_TOKEN", pattern: /^[A-Za-z0-9_]{20,255}$/, label: "GitHub token" },
 };

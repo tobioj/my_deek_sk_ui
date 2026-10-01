@@ -3,6 +3,7 @@
 import { createChat, getProject, listChats } from "@/lib/storage";
 import type { Chat } from "@/lib/types";
 import { stringList, validFolders } from "@/lib/validate";
+import { isEffort, validModelId } from "@/lib/models";
 
 export async function GET(req: Request) {
   const q = new URL(req.url).searchParams.get("q") ?? undefined;
@@ -19,13 +20,14 @@ export async function POST(req: Request) {
     return Response.json({ error: (e as Error).message }, { status: 400 });
   }
   const chat = await createChat({
-    model: body.model === "deepseek-v4-pro" || body.model === "deepseek-flash" ? body.model : undefined,
+    model: validModelId(body.model) ? body.model : undefined,
     thinking: typeof body.thinking === "boolean" ? body.thinking : undefined,
-    effort: body.effort === "high" || body.effort === "max" ? body.effort : undefined,
+    effort: isEffort(body.effort) ? body.effort : undefined,
     folders,
     hiddenProjectFolders: stringList(body.hiddenProjectFolders),
     webSearch: body.webSearch === true,
     github: body.github === true,
+    code: body.code === true,
     mode: body.mode === "plan" || body.mode === "edit" || body.mode === "auto" ? body.mode : "ask",
     projectId: project?.id ?? null,
   });

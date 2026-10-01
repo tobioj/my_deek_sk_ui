@@ -1,6 +1,7 @@
 // GET / PATCH / DELETE a single chat.
 import { stringList, validFolders } from "@/lib/validate";
 import { deleteChat, getChat, updateChat } from "@/lib/storage";
+import { isEffort, validModelId } from "@/lib/models";
 import type { Chat } from "@/lib/types";
 
 export async function GET(_req: Request, ctx: RouteContext<"/api/chats/[id]">) {
@@ -22,9 +23,9 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/chats/[id]">) 
   }
   const chat = await updateChat(id, (c) => {
     if (typeof body.title === "string" && body.title.trim()) c.title = body.title.trim().slice(0, 120);
-    if (body.model === "deepseek-flash" || body.model === "deepseek-v4-pro") c.model = body.model;
+    if (validModelId(body.model)) c.model = body.model;
     if (typeof body.thinking === "boolean") c.thinking = body.thinking;
-    if (body.effort === "high" || body.effort === "max") c.effort = body.effort;
+    if (isEffort(body.effort)) c.effort = body.effort;
     if (folders !== undefined) {
       c.folders = folders;
       delete c.workspace; // replaced by the folders list
@@ -32,6 +33,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/chats/[id]">) 
     if (body.hiddenProjectFolders !== undefined) c.hiddenProjectFolders = stringList(body.hiddenProjectFolders);
     if (typeof body.webSearch === "boolean") c.webSearch = body.webSearch;
     if (typeof body.github === "boolean") c.github = body.github;
+    if (typeof body.code === "boolean") c.code = body.code;
     if (body.mode === "ask" || body.mode === "plan" || body.mode === "edit" || body.mode === "auto") {
       c.mode = body.mode;
       c.autoApprove = false; // picking a mode replaces the old "always approve" flag

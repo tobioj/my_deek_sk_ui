@@ -7,7 +7,7 @@ const BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 
 export class MissingKeyError extends Error {
   constructor() {
-    super("No DeepSeek API key is set. Open Settings (bottom-left) and add your key.");
+    super("No DeepSeek API key is set. Open Settings (bottom-left) and add your key, or switch this chat to a Claude model.");
   }
 }
 

@@ -2,7 +2,7 @@
 import { validFolders } from "@/lib/validate";
 import { createProject, listProjects } from "@/lib/storage";
 import type { Project } from "@/lib/types";
-import { cleanFiles, repoList, terminalFields } from "./shared";
+import { cleanFiles, repoList, skillFields, terminalFields } from "./shared";
 
 export async function GET() {
   return Response.json(await listProjects());
@@ -25,6 +25,7 @@ export async function POST(req: Request) {
     docsFolder: typeof body.docsFolder === "string" && body.docsFolder.trim() ? body.docsFolder.trim() : null,
     githubRepos: repoList(body.githubRepos),
     ...terminalFields(body as Record<string, unknown>),
+    ...skillFields(body as Record<string, unknown>),
   });
   return Response.json(project);
 }

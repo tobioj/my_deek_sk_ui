@@ -1,8 +1,11 @@
-// Token estimates and cost. Prices are USD per 1M tokens at off-peak rates;
-// peak hours cost double. Source: https://api-docs.deepseek.com/quick_start/pricing
-import type { ModelId, Usage } from "./types";
+// Token estimates and cost.
+// DeepSeek: USD per 1M tokens at off-peak rates; peak hours cost double.
+// Source: https://api-docs.deepseek.com/quick_start/pricing
+// Claude: see claudePrice() in models.ts (no peak hours).
+import { claudePrice, providerOf, WEB_SEARCH_PRICE } from "./models";
+import type { Usage } from "./types";
 
-const PRICES: Record<ModelId, { cacheHit: number; cacheMiss: number; output: number }> = {
+const DEEPSEEK_PRICES: Record<string, { cacheHit: number; cacheMiss: number; output: number }> = {
   "deepseek-flash": { cacheHit: 0.003, cacheMiss: 0.15, output: 0.6 },
   "deepseek-v4-pro": { cacheHit: 0.022, cacheMiss: 0.66, output: 1.98 },
 };
@@ -15,10 +18,23 @@ export function isPeak(date = new Date()): boolean {
   return (h >= 1 && h < 4) || (h >= 6 && h < 10);
 }
 
-export function costOf(model: ModelId, u: Pick<Usage, "cacheHitTokens" | "cacheMissTokens" | "completionTokens">, when = new Date()): number {
-  const p = PRICES[model];
+type Counts = Pick<Usage, "cacheHitTokens" | "cacheMissTokens" | "completionTokens"> & Partial<Pick<Usage, "cacheWriteTokens" | "searches">>;
+
+// Cost in USD, or null if the app doesn't know this model's price.
+export function priceOf(model: string, u: Counts, when = new Date()): number | null {
+  if (providerOf(model) === "claude") {
+    const p = claudePrice(model);
+    if (!p) return null;
+    const tokens = u.cacheMissTokens * p.input + (u.cacheWriteTokens ?? 0) * p.input * 1.25 + u.cacheHitTokens * p.cacheRead + u.completionTokens * p.output;
+    return tokens / 1_000_000 + (u.searches ?? 0) * WEB_SEARCH_PRICE;
+  }
+  const p = DEEPSEEK_PRICES[model] ?? DEEPSEEK_PRICES["deepseek-flash"];
   const mult = isPeak(when) ? 2 : 1;
   return ((u.cacheHitTokens * p.cacheHit + u.cacheMissTokens * p.cacheMiss + u.completionTokens * p.output) / 1_000_000) * mult;
+}
+
+export function costOf(model: string, u: Counts, when = new Date()): number {
+  return priceOf(model, u, when) ?? 0;
 }
 
 // Rough estimate (~4 characters per token for English and code) for text not yet sent.

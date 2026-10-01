@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { skillNames } from "@/lib/storage";
 import type { ProjectFile } from "@/lib/types";
 
 const MAX_FILES = 50;
@@ -19,6 +20,15 @@ export function cleanFiles(files: unknown): ProjectFile[] {
 export function repoList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((r): r is string => typeof r === "string" && /^[\w.-]+\/[\w.-]+$/.test(r)))].slice(0, 100);
+}
+
+// Skills: whether your own skills apply in the project too, and the ones switched off there.
+// (The project's own skills are files in the data folder, managed through /api/skills.)
+export function skillFields(body: Record<string, unknown>) {
+  const out: { skillsGlobal?: boolean; skillsOff?: string[] } = {};
+  if (typeof body.skillsGlobal === "boolean") out.skillsGlobal = body.skillsGlobal;
+  if (Array.isArray(body.skillsOff)) out.skillsOff = skillNames(body.skillsOff);
+  return out;
 }
 
 // Terminal settings: a switch, internet, the time limit, and "Always allow" commands.

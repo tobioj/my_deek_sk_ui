@@ -1,8 +1,8 @@
 "use client";
 // Small building blocks shared across the app.
 import clsx from "clsx";
-import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { ChevronRight, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export function IconButton({
   label,
@@ -213,7 +213,7 @@ export function Segmented<T extends string>({
           type="button"
           onClick={() => onChange(o.value)}
           className={clsx(
-            "rounded-md px-2.5 py-1 text-[12.5px] font-medium transition-colors",
+            "whitespace-nowrap rounded-md px-2.5 py-1 text-[12.5px] font-medium transition-colors",
             value === o.value ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg",
           )}
         >
@@ -221,5 +221,64 @@ export function Segmented<T extends string>({
         </button>
       ))}
     </div>
+  );
+}
+
+// A small "more" toggle for a long explanation (closed until you open it).
+export function Fold({ label, children, className, plain }: { label: string; children: ReactNode; className?: string; plain?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={className}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="inline-flex items-center gap-1 text-[12px] text-accent hover:underline">
+        <ChevronRight size={12} className={clsx("transition-transform", open && "rotate-90")} />
+        {label}
+      </button>
+      {open && <div className={plain ? "mt-2" : "mt-1 text-xs leading-relaxed text-muted"}>{children}</div>}
+    </div>
+  );
+}
+
+// A section you can fold away. It remembers whether you left it open (per section, in this browser).
+export function FoldSection({
+  id,
+  title,
+  icon,
+  summary,
+  defaultOpen = false,
+  children,
+}: {
+  id: string;
+  title: string;
+  icon?: ReactNode;
+  summary?: ReactNode; // shown on the right while it's folded
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const key = `fold:${id}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem(key);
+      return v === null ? defaultOpen : v === "1";
+    } catch {
+      return defaultOpen;
+    }
+  });
+  const toggle = () =>
+    setOpen((o) => {
+      try {
+        localStorage.setItem(key, o ? "0" : "1");
+      } catch {}
+      return !o;
+    });
+  return (
+    <section className="rounded-xl border border-line">
+      <button type="button" onClick={toggle} aria-expanded={open} className="flex w-full items-center gap-2 rounded-xl px-3.5 py-2.5 text-left hover:bg-hover">
+        <ChevronRight size={14} className={clsx("shrink-0 text-muted transition-transform", open && "rotate-90")} />
+        {icon && <span className="shrink-0 text-muted">{icon}</span>}
+        <span className="shrink-0 text-[14px] font-semibold">{title}</span>
+        {summary && !open && <span className="ml-auto min-w-0 truncate pl-3 text-xs text-muted">{summary}</span>}
+      </button>
+      {open && <div className="space-y-3 border-t border-line px-3.5 py-3">{children}</div>}
+    </section>
   );
 }

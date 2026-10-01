@@ -18,13 +18,14 @@ export interface RunTarget {
   chatId: string;
   folders: string[]; // the project's folders linked to this chat (short names)
   platform: Platform;
+  ai: string; // the chat's AI ("DeepSeek" or "Claude")
   sendOutput: (command: string, output: string) => void; // put the output in the message box
   onStarted: () => void; // refresh the Running list
 }
 export const RunContext = createContext<RunTarget | null>(null);
 const StreamingContext = createContext(false);
 
-// DeepSeek often writes math as \( … \) and \[ … \]; remark-math wants $$ … $$.
+// Models often write math as \( … \) and \[ … \]; remark-math wants $$ … $$.
 // Convert them, leaving code blocks and inline code alone. Single dollars stay plain text,
 // so prices like "$5 to $10" don't turn into math.
 function normalizeMath(src: string): string {
@@ -72,7 +73,7 @@ type RunState = { id: string | null; status: ProcessInfo["status"] | "starting";
 const smallButton = "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted hover:bg-hover hover:text-fg";
 
 // ▶ Run: runs a code block's command in the project folder and follows its output.
-// It doesn't involve DeepSeek at all, so it costs nothing.
+// It doesn't involve the AI at all, so it costs nothing.
 function useRunner(target: RunTarget | null, command: string) {
   const [run, setRun] = useState<RunState | null>(null);
   const alive = useRef(true);
@@ -142,7 +143,7 @@ function RunButton({ target, busy, onRun }: { target: RunTarget; busy: boolean; 
         disabled={busy}
         onClick={() => (target.folders.length > 1 ? setPick((p) => !p) : onRun(target.folders[0]))}
         className={clsx(smallButton, "disabled:opacity-50")}
-        title={`Run it in ${target.folders.length > 1 ? "a project folder" : target.folders[0]} (${target.platform === "mac" ? "sandboxed" : "not sandboxed"}). Costs nothing: DeepSeek isn't involved.`}
+        title={`Run it in ${target.folders.length > 1 ? "a project folder" : target.folders[0]} (${target.platform === "mac" ? "sandboxed" : "not sandboxed"}). Costs nothing: ${target.ai} isn't involved.`}
       >
         <Play size={12} /> Run
       </button>
@@ -166,7 +167,7 @@ function RunButton({ target, busy, onRun }: { target: RunTarget; busy: boolean; 
   );
 }
 
-function RunOutput({ run, onStop, onSend, onClose }: { run: RunState; onStop: () => void; onSend: () => void; onClose: () => void }) {
+function RunOutput({ run, ai, onStop, onSend, onClose }: { run: RunState; ai: string; onStop: () => void; onSend: () => void; onClose: () => void }) {
   const outRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
     if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
@@ -206,8 +207,8 @@ function RunOutput({ run, onStop, onSend, onClose }: { run: RunState; onStop: ()
           </button>
         )}
         {!live && run.text && (
-          <button type="button" onClick={onSend} className={smallButton} title="Add this output to your message, so you can ask DeepSeek about it">
-            <MessageSquarePlus size={13} /> Send to DeepSeek
+          <button type="button" onClick={onSend} className={smallButton} title={`Add this output to your message, so you can ask ${ai} about it`}>
+            <MessageSquarePlus size={13} /> Send to {ai}
           </button>
         )}
         {!live && (
@@ -248,7 +249,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         </div>
       </div>
       <pre className="overflow-x-auto px-4 py-3 font-mono text-[13px] leading-relaxed">{children}</pre>
-      {run && <RunOutput run={run} onStop={stop} onSend={() => target?.sendOutput(command, run.text)} onClose={clear} />}
+      {run && <RunOutput run={run} ai={target?.ai ?? "the AI"} onStop={stop} onSend={() => target?.sendOutput(command, run.text)} onClose={clear} />}
     </div>
   );
 }

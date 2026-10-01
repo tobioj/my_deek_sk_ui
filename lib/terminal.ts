@@ -169,14 +169,14 @@ export async function executeCommand(o: {
   root: Root;
   run: CommandRun;
   chatId: string | null;
-  by: "deepseek" | "you";
+  by: "deepseek" | "claude" | "you"; // the AI that started it, or you (▶ Run)
   signal?: AbortSignal;
   onStart?: (procId: string) => void;
   onOutput?: (chunk: string) => void;
 }): Promise<{ run: CommandRun; result: string; proc?: Proc }> {
   const { access, root } = o;
   const run: CommandRun = { ...o.run };
-  const readOnly = run.readOnly && o.by === "deepseek";
+  const readOnly = run.readOnly && o.by !== "you";
   const background = !!run.background;
   let proc: Proc;
   try {
@@ -197,7 +197,7 @@ export async function executeCommand(o: {
       by: o.by,
       background: background || o.by === "you",
       sandboxed: access.sandboxed,
-      timeoutMs: o.by === "deepseek" && !background ? access.minutes * 60_000 : 0,
+      timeoutMs: o.by !== "you" && !background ? access.minutes * 60_000 : 0,
     });
   } catch (e) {
     run.status = "failed";
@@ -253,7 +253,7 @@ export async function executeCommand(o: {
   }
   // DeepSeek's quick commands leave the Running list once they're done (the chat shows the result).
   // Background ones and the ones you run stay until you clear them.
-  if (o.by === "deepseek" && !background && info.status !== "stop_failed") forgetProcess(info.id);
+  if (o.by !== "you" && !background && info.status !== "stop_failed") forgetProcess(info.id);
   return { run, result, proc };
 }
 

@@ -1,5 +1,5 @@
 "use client";
-// The Running list: commands DeepSeek or you started, with their real status (checked with the
+// The Running list: commands the AI or you started, with their real status (checked with the
 // system, not guessed). Closing the window doesn't stop them; you stop them here.
 import clsx from "clsx";
 import { FileText, Loader2, Square, Terminal } from "lucide-react";
@@ -54,7 +54,7 @@ export function RunningButton({ procs, onChange }: { procs: ProcessInfo[]; onCha
           "flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px]",
           live ? "border-accent/40 bg-accent-soft text-accent" : "border-line text-muted hover:bg-hover hover:text-fg",
         )}
-        title="Commands started by DeepSeek or with ▶ Run"
+        title="Commands started by the AI or with ▶ Run"
       >
         {live ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> : <Terminal size={13} />}
         {live ? `${live} running` : "Commands"}
@@ -131,7 +131,7 @@ function RunningPanel({ procs, onChange }: { procs: ProcessInfo[]; onChange: () 
                   {p.projectName} / {p.folder}
                 </span>
                 <span>·</span>
-                <span>{p.by === "you" ? "you" : "DeepSeek"}</span>
+                <span>{p.by === "you" ? "you" : p.by === "claude" ? "Claude" : "DeepSeek"}</span>
                 <span>·</span>
                 <span>{ago(p.startedAt)}</span>
                 {!p.sandboxed && <span>· not sandboxed</span>}

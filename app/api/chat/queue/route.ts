@@ -1,5 +1,5 @@
-// POST /api/chat/queue — messages you send while DeepSeek is still replying in that chat.
-//   { chatId, text, attachments }  add one: DeepSeek reads it at the reply's next step
+// POST /api/chat/queue — messages you send while the AI is still replying in that chat.
+//   { chatId, text, attachments }  add one: the AI reads it at the reply's next step
 //                                  (409 if the reply has just finished: send it normally)
 //   { chatId, cancel: id }         take one back
 //   { chatId, now: true }          "Answer together now": cut off what it's writing and start again
@@ -21,11 +21,11 @@ export async function POST(req: Request) {
 
   const text = (body.text ?? "").trim();
   if (!text && !body.attachments?.length) return Response.json({ error: "Empty message" }, { status: 400 });
-  if (!isReplying(body.chatId)) return Response.json({ error: "DeepSeek isn't replying in this chat any more." }, { status: 409 });
+  if (!isReplying(body.chatId)) return Response.json({ error: "It isn't replying in this chat any more." }, { status: 409 });
   const message = await buildUserMessage(text, body.attachments ?? [], (await getSettings()).maxFileChars);
   if (!enqueue(body.chatId, message)) {
     await discardUploads([message]);
-    return Response.json({ error: "DeepSeek isn't replying in this chat any more." }, { status: 409 });
+    return Response.json({ error: "It isn't replying in this chat any more." }, { status: 409 });
   }
   return Response.json({ message });
 }

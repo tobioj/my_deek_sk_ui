@@ -1,7 +1,7 @@
 "use client";
 // Create or edit a project: a name, shared context every chat sees, shared files, folders,
-// and whether DeepSeek may run commands in them (Terminal).
-import { AlertTriangle, FileText, FolderOpen, Loader2, Paperclip, Plus, Trash2, X } from "lucide-react";
+// and whether the AI may run commands in them (Terminal).
+import { AlertTriangle, FileText, FolderOpen, GitBranch, Loader2, Paperclip, Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { nanoid } from "nanoid";
 import { useState } from "react";
 import { api, fileToAttachment } from "@/lib/client";
@@ -9,7 +9,8 @@ import { formatTokens } from "@/lib/tokens";
 import { baseName, projectFolders } from "@/lib/folders";
 import type { Platform } from "@/lib/commands";
 import type { Project, ProjectFile } from "@/lib/types";
-import { Button, Modal, Segmented, Switch } from "./ui";
+import { ProjectSkillsSection } from "./SkillsSettings";
+import { Button, Fold, FoldSection, Modal, Segmented, Switch } from "./ui";
 
 interface Props {
   open: boolean;
@@ -17,6 +18,8 @@ interface Props {
   allowedRepos: string[]; // GitHub allowlist from Settings
   platform: Platform; // macOS gets the sandbox; Windows asks before every command
   defaultDocsFolder: string; // Docs folder from Settings
+  globalSkillsFolder: string; // the extra skills folder from Settings
+  globalSkillsOff: string[]; // skills (names) switched off in Settings
   onClose: () => void;
   onSaved: (p: Project) => void;
   onDelete: (id: string) => void;
@@ -27,7 +30,7 @@ export function ProjectDialog(props: Props) {
   return <ProjectForm key={props.project?.id ?? "new"} {...props} />;
 }
 
-function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClose, onSaved, onDelete }: Props) {
+function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, globalSkillsFolder, globalSkillsOff, onClose, onSaved, onDelete }: Props) {
   const [name, setName] = useState(project?.name ?? "");
   const [context, setContext] = useState(project?.context ?? "");
   const [folders, setFolders] = useState<string[]>(projectFolders(project));
@@ -41,6 +44,8 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
   const [internet, setInternet] = useState(project?.terminalInternet ?? false);
   const [minutes, setMinutes] = useState(String(project?.terminalMinutes ?? 10));
   const [allowed, setAllowed] = useState<string[]>(project?.allowedCommands ?? []);
+  const [skillsGlobal, setSkillsGlobal] = useState<boolean | undefined>(project?.skillsGlobal);
+  const [skillsOff, setSkillsOff] = useState<string[]>(project?.skillsOff ?? []);
   const [ruleInput, setRuleInput] = useState("");
   const addRule = () => {
     const r = ruleInput.trim();
@@ -99,6 +104,8 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
         terminalInternet: internet,
         terminalMinutes: Number(minutes),
         allowedCommands: allowed,
+        ...(skillsGlobal !== undefined ? { skillsGlobal } : {}),
+        skillsOff,
       };
       const saved = project
         ? await api<Project>(`/api/projects/${project.id}`, { method: "PATCH", json: body })
@@ -119,7 +126,7 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
       open
       onClose={onClose}
       title={project ? "Project settings" : "New project"}
-      width="max-w-xl"
+      width="max-w-3xl"
       footer={
         <>
           {project && (
@@ -132,7 +139,7 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
                 onClose();
               }}
             >
-              <Trash2 size={13} /> {confirmDelete ? "Click again to delete" : "Delete project"}
+              <Trash2 size={13} /> {confirmDelete ? "Click again to delete (its own skills too)" : "Delete project"}
             </Button>
           )}
           <Button variant="ghost" onClick={onClose}>
@@ -170,9 +177,7 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
 
         <label className="block">
           <span className="mb-1 block text-[13px] font-medium">Project context</span>
-          <span className="mb-1.5 block text-xs text-muted">
-            Every chat in this project sees this. Describe the project, your goals, conventions, and how you want DeepSeek to respond.
-          </span>
+          <span className="mb-1.5 block text-xs text-muted">Every chat in this project sees this.</span>
           <textarea
             value={context}
             onChange={(e) => setContext(e.target.value)}
@@ -184,9 +189,7 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
 
         <div>
           <span className="mb-1 block text-[13px] font-medium">Memory</span>
-          <span className="mb-2 block text-xs text-muted">
-            Chats never see each other. This decides whether your global instructions from Settings also apply here.
-          </span>
+          <span className="mb-2 block text-xs text-muted">Whether your instructions from Settings also apply here (chats never see each other).</span>
           <div className="grid grid-cols-2 gap-2">
             {[
               { value: false, title: "Project + global", body: "This project's context, plus your instructions from Settings." },
@@ -209,10 +212,10 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
 
         <div>
           <span className="mb-1 block text-[13px] font-medium">Folders (optional)</span>
-          <span className="mb-1.5 block text-xs text-muted">
-            Your codebase. Linked to every chat in this project, so DeepSeek can explore it and read only the files it needs. Add as many as you
-            like (e.g. backend and frontend). A chat can switch one off, or add its own.
-          </span>
+          <Fold label="What folders do" className="mb-1.5">
+            Your codebase. Linked to every chat in this project, so the AI can explore it and read only the files it needs. Add as many as you like
+            (e.g. backend and frontend). A chat can switch one off, or add its own.
+          </Fold>
           {folders.length > 0 && (
             <div className="mb-2 divide-y divide-line rounded-lg border border-line bg-app">
               {folders.map((f) => (
@@ -255,19 +258,24 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
           </div>
         </div>
 
-        <div>
-          <div className="mb-1 flex items-center justify-between gap-3">
-            <span className="text-[13px] font-medium">Terminal</span>
-            <Switch checked={terminal} onChange={setTerminal} label="Let DeepSeek run commands in this project's folders" disabled={!folders.length} />
+        <FoldSection
+          id="project-terminal"
+          title="Terminal"
+          icon={<TerminalIcon size={15} />}
+          summary={!folders.length ? "Needs a folder" : terminal ? `On · ${allowed.length} always allowed` : "Off"}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[13px]">Let the AI run commands in this project&apos;s folders</span>
+            <Switch checked={terminal} onChange={setTerminal} label="Let the AI run commands in this project's folders" disabled={!folders.length} />
           </div>
-          <span className="block text-xs text-muted">
+          <Fold label="How commands are kept safe">
             {!folders.length
               ? "Add a folder above first: commands only ever run in this project's folders."
               : platform === "mac"
-                ? "Let DeepSeek run commands in this project's folders, in a sandbox: they can only change files in these folders, can't read your SSH keys, logins or Keychain, and can't push to GitHub. Look-only commands (ls, git status…) run straight away; others ask first, except in Auto mode."
-                : "Let DeepSeek run commands in this project's folders. Windows has no sandbox, so every command except look-only ones (dir, git status…) asks you first, even in Auto mode. Nothing can push to GitHub."}{" "}
-            Code blocks in replies also get a ▶ Run button.
-          </span>
+                ? "Let the AI run commands in this project's folders, in a sandbox: they can only change files in these folders, can't read your SSH keys, logins or Keychain, and can't push to GitHub. Look-only commands (ls, git status…) run straight away; others ask first, except in Auto mode."
+                : "Let the AI run commands in this project's folders. Windows has no sandbox, so every command except look-only ones (dir, git status…) asks you first, even in Auto mode. Nothing can push to GitHub."}{" "}
+            Code blocks in replies also get a ▶ Run button. Each AI also needs <b>Run commands</b> allowed in Settings.
+          </Fold>
           {terminal && folders.length > 0 && (
             <div className="mt-2.5 space-y-3 rounded-lg border border-line bg-app px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
@@ -284,7 +292,7 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-[13px]">Time limit</div>
-                  <div className="text-[11.5px] text-muted">For each command DeepSeek runs. Background servers and your ▶ Run commands have no limit.</div>
+                  <div className="text-[11.5px] text-muted">For each command the AI runs. Background servers and your ▶ Run commands have no limit.</div>
                 </div>
                 <Segmented
                   value={minutes}
@@ -297,12 +305,14 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
                 />
               </div>
               <div>
-                <div className="text-[13px]">Always allowed</div>
+                <div className="text-[13px]">
+                  Always allowed{allowed.length > 0 && <span className="text-muted"> ({allowed.length})</span>}
+                </div>
                 <div className="mb-1.5 text-[11.5px] text-muted">
                   Commands starting with these run without asking in Edit and Auto mode. Added from a command&apos;s card with &ldquo;Always allow&rdquo;.
                 </div>
                 {allowed.length > 0 && (
-                  <div className="mb-1.5 divide-y divide-line rounded-lg border border-line bg-surface">
+                  <div className="mb-1.5 max-h-40 divide-y divide-line overflow-y-auto rounded-lg border border-line bg-surface">
                     {allowed.map((r) => (
                       <div key={r} className="flex items-center gap-2 px-3 py-1.5">
                         <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{r}</code>
@@ -338,15 +348,25 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
               </div>
             </div>
           )}
-        </div>
+        </FoldSection>
 
-        <div>
-          <span className="mb-1 block text-[13px] font-medium">Docs folder (optional)</span>
-          <span className="mb-1.5 block text-xs text-muted">
-            Where DeepSeek saves documents for this project, in any mode. Empty = the default from Settings
+        <ProjectSkillsSection
+          projectId={project?.id ?? null}
+          folders={folders}
+          useGlobal={skillsGlobal ?? !isolated}
+          setUseGlobal={setSkillsGlobal}
+          off={skillsOff}
+          setOff={setSkillsOff}
+          globalFolder={globalSkillsFolder}
+          globalOff={globalSkillsOff}
+        />
+
+        <FoldSection id="project-docs" title="Docs folder" icon={<FileText size={15} />} summary={docsFolder.trim() || (defaultDocsFolder ? "Default from Settings" : "Off")}>
+          <Fold label="What this is">
+            Where the AI saves documents for this project, in any mode. Empty = the default from Settings
             {defaultDocsFolder ? ` (${defaultDocsFolder})` : " (currently off)"}. Tip: a <span className="font-mono">docs</span> folder inside your
             codebase keeps plans next to the code.
-          </span>
+          </Fold>
           <div className="flex gap-2">
             <input
               value={docsFolder}
@@ -363,10 +383,9 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
               <FolderOpen size={14} /> Choose…
             </Button>
           </div>
-        </div>
+        </FoldSection>
 
-        <div>
-          <span className="mb-1 block text-[13px] font-medium">GitHub repos (read-only)</span>
+        <FoldSection id="project-github" title="GitHub repos (read-only)" icon={<GitBranch size={15} />} summary={allowedRepos.length ? `${repos.length} picked` : "Not set up"}>
           {allowedRepos.length ? (
             <>
               <span className="mb-1.5 block text-xs text-muted">Which of your allowed repos this project&apos;s chats may read. None ticked = no GitHub in this project.</span>
@@ -387,11 +406,11 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
           ) : (
             <span className="block text-xs text-muted">Set up GitHub in Settings first, then pick this project&apos;s repos here.</span>
           )}
-        </div>
+        </FoldSection>
 
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[13px] font-medium">Project files (optional)</span>
+        <FoldSection id="project-files" title="Project files" icon={<Paperclip size={15} />} summary={files.length ? `${files.length} file${files.length === 1 ? "" : "s"}` : "None"}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted">Always in every chat of this project. Drag files here, or:</span>
             <label className="inline-flex cursor-pointer items-center gap-1 text-[12.5px] text-accent hover:underline">
               <Paperclip size={13} /> Add files
               <input
@@ -405,10 +424,9 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
               />
             </label>
           </div>
-          <span className="mb-1.5 block text-xs text-muted">
-            Documents DeepSeek should always keep in mind (specs, notes, a style guide). Their full text goes with every message, so keep them
-            small. Drag them here, or click Add files.
-          </span>
+          <Fold label="What to put here">
+            Documents the AI should always keep in mind (specs, notes, a style guide). Their full text goes with every message, so keep them small.
+          </Fold>
           {files.length > 0 ? (
             <div className="divide-y divide-line rounded-lg border border-line">
               {files.map((f) => (
@@ -432,7 +450,7 @@ function ProjectForm({ project, allowedRepos, platform, defaultDocsFolder, onClo
               {busy === "files" ? "Reading…" : "No files yet"}
             </div>
           )}
-        </div>
+        </FoldSection>
 
         {tokens > 0 && (
           <p className="text-xs text-muted">

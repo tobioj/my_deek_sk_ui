@@ -25,9 +25,12 @@ import {
   Loader2,
   Pencil,
   RotateCcw,
+  ScrollText,
   Search,
   Settings as SettingsIcon,
   Square,
+  Sparkles,
+  SquareCode,
   Terminal,
   Trash2,
   X,
@@ -35,7 +38,8 @@ import {
 import { memo, useContext, useEffect, useRef, useState } from "react";
 import { api, formatBytes } from "@/lib/client";
 import { formatCost, formatTokens } from "@/lib/tokens";
-import { MODELS, type AssistantMessage, type AssistantStep, type Attachment, type CommandRun, type ProcessInfo, type ToolCall, type UserMessage } from "@/lib/types";
+import { aiName, labelFromId } from "@/lib/models";
+import type { AssistantMessage, AssistantStep, Attachment, ChatSummaryNote, CommandRun, ProcessInfo, ToolCall, UserMessage } from "@/lib/types";
 import { DiffView } from "./DiffView";
 import { CopyButton, Markdown } from "./Markdown";
 import { ProcsContext } from "./RunningList";
@@ -81,9 +85,9 @@ export function AttachmentChip({
             ? error
             : loading
               ? "Reading…"
-              : a.kind === "image"
-                ? formatBytes(a.size)
-                : `${formatTokens(Math.ceil(a.size / 4))} tokens${a.truncated ? " · cut off" : ""}${a.name.includes("/") ? ` · ${a.name.split("/").slice(0, -1).join("/")}` : ""}`}
+              : a.kind === "image" || (a.sandbox && a.content === undefined && !a.name.match(/\.(csv|tsv|json|xml)$/i))
+                ? `${formatBytes(a.size)}${a.sandbox ? " · for code" : ""}`
+                : `${formatTokens(Math.ceil(a.size / 4))} tokens${a.truncated ? " · cut off" : ""}${a.sandbox ? " · also for code" : ""}${a.name.includes("/") ? ` · ${a.name.split("/").slice(0, -1).join("/")}` : ""}`}
         </div>
       </div>
       {onRemove && <RemoveButton onClick={onRemove} />}
@@ -199,15 +203,17 @@ export const UserBubble = memo(function UserBubble({
   );
 });
 
-// A message you sent while DeepSeek was still replying. It goes in at the reply's next step;
+// A message you sent while the AI was still replying. It goes in at the reply's next step;
 // "Answer together now" cuts off what it's writing so it starts again with this in mind.
 export function QueuedBubble({
   message,
+  ai,
   busy,
   onNow,
   onCancel,
 }: {
   message: UserMessage;
+  ai: string; // "DeepSeek" or "Claude"
   busy: boolean; // "Answer together now" was clicked
   onNow: () => void;
   onCancel: () => void;
@@ -233,11 +239,11 @@ export function QueuedBubble({
           </span>
         ) : (
           <>
-            <span className="mr-1">DeepSeek will read this at its next step</span>
+            <span className="mr-1">{ai} will read this at its next step</span>
             <button
               type="button"
               onClick={onNow}
-              title="Cut off what DeepSeek is writing and start again with this in mind. The cut-off part is still billed."
+              title={`Cut off what ${ai} is writing and start again with this in mind. The cut-off part is still billed.`}
               className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-accent hover:bg-hover"
             >
               <Zap size={12} /> Answer together now
@@ -297,6 +303,7 @@ const TOOL_ICONS: Record<string, typeof FileText> = {
   find_files: FileSearch,
   web_search: Globe,
   read_webpage: Link2,
+  web_fetch: Link2,
   list_documents: FolderTree,
   read_document: FileText,
   github_list_repos: GitBranch,
@@ -307,6 +314,8 @@ const TOOL_ICONS: Record<string, typeof FileText> = {
   github_commits: GitCommitHorizontal,
   github_ci_runs: PlayCircle,
   check_command: Terminal,
+  use_skill: Sparkles,
+  read_skill_file: Sparkles,
   stop_command: Square,
 };
 
@@ -335,6 +344,7 @@ function pendingLabel(call: ToolCall): string {
     case "web_search":
       return `Searching the web for "${args.query ?? ""}"…`;
     case "read_webpage":
+    case "web_fetch":
       return `Reading ${hostOf(args.url ?? "")}…`;
     case "list_documents":
       return "Looking at your docs…";
@@ -356,6 +366,10 @@ function pendingLabel(call: ToolCall): string {
       return `Checking CI for ${args.repo ?? "repo"}…`;
     case "check_command":
       return args.id ? `Checking ${args.id}…` : "Checking running commands…";
+    case "use_skill":
+      return `Opening the ${args.name ?? ""} skill…`;
+    case "read_skill_file":
+      return `Reading ${args.path ?? "a file"} from the ${args.name ?? ""} skill…`;
     case "stop_command":
       return `Stopping ${args.id ?? "command"}…`;
     default:
@@ -405,6 +419,61 @@ function ToolCard({ call }: { call: ToolCall }) {
   );
 }
 
+// Code Claude ran in Anthropic's sandbox (not on your computer): what ran, what it printed, and
+// any files it made (download them from here).
+function CodeCard({ call }: { call: ToolCall }) {
+  const [open, setOpen] = useState(false);
+  let args: Record<string, string> = {};
+  try {
+    args = JSON.parse(call.args || "{}");
+  } catch {}
+  const code = args.command && args.command !== "create" && args.command !== "view" && args.command !== "str_replace" ? args.command : args.file_text ?? args.code ?? "";
+  const done = call.summary !== undefined;
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={clsx(
+          "inline-flex max-w-full items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1 text-[12.5px] hover:bg-hover",
+          call.ok === false ? "text-danger" : "text-muted",
+        )}
+        title="Runs in Anthropic's sandbox, not on your computer"
+      >
+        {done ? <SquareCode size={13} className="shrink-0" /> : <Loader2 size={13} className="shrink-0 animate-spin" />}
+        <span className="truncate">{done ? call.summary : "Running code in Claude's sandbox…"}</span>
+        <ChevronRight size={13} className={clsx("shrink-0 transition-transform", open && "rotate-90")} />
+      </button>
+      {call.files?.length ? (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {call.files.map((f) => (
+            <a
+              key={f.upload}
+              href={`/api/uploads/${f.upload}?as=${encodeURIComponent(f.name)}`}
+              target="_blank"
+              rel="noreferrer noopener"
+              download={/\.(png|jpe?g|gif|webp|pdf)$/i.test(f.upload) ? undefined : f.name}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1 text-[12.5px] text-accent hover:bg-hover"
+            >
+              <Download size={13} /> {f.name} <span className="text-[11px] text-faint">{formatBytes(f.size)}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {open && (
+        <div className="mt-1.5 max-w-2xl space-y-1.5">
+          {code && <pre className="max-h-72 overflow-auto rounded-lg border border-line bg-code px-3 py-2 font-mono text-[12px] leading-relaxed">{code}</pre>}
+          {call.result && (
+            <pre className="max-h-72 overflow-auto rounded-lg border border-line bg-code px-3 py-2 font-mono text-[12px] leading-relaxed text-muted">
+              {call.result.length > 20000 ? call.result.slice(0, 20000) + "\n…" : call.result}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const EDIT_TOOLS = new Set(["edit_file", "write_file", "delete_file", "save_document"]);
 // command: the command as you edited it (commands only).
 export type Decide = (callId: string, decision: "approve" | "reject" | "approve_remember", command?: string) => void;
@@ -417,7 +486,7 @@ const KIND_UI = {
 } as const;
 
 // A proposed or applied file change, with its before/after preview.
-function EditCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) {
+function EditCard({ call, ai, onDecide }: { call: ToolCall; ai: string; onDecide?: Decide }) {
   const [open, setOpen] = useState(false);
   const [sent, setSent] = useState<"approve" | "reject" | null>(null);
   const [remember, setRemember] = useState(false);
@@ -471,7 +540,7 @@ function EditCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) {
       {pending && onDecide && (
         <div className="flex items-center justify-end gap-2 border-t border-line bg-app px-3 py-2">
           <span className="mr-auto text-[12px] text-muted">
-            {sent ? "Sending…" : d.doc ? "DeepSeek wants to save this to your Docs folder" : "DeepSeek wants to make this change"}
+            {sent ? "Sending…" : d.doc ? `${ai} wants to save this to your Docs folder` : `${ai} wants to make this change`}
           </span>
           {d.doc && !sent && (
             <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Future saves to this doc won't ask. You can undo this in Settings → Docs folder.">
@@ -552,8 +621,8 @@ function CommandStatusBadge({ r, elapsed, live }: { r: CommandRun; elapsed: numb
   }
 }
 
-// A command DeepSeek wants to run (or ran): approve it, edit it first, always allow it, or stop it.
-function CommandCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) {
+// A command the AI wants to run (or ran): approve it, edit it first, always allow it, or stop it.
+function CommandCard({ call, ai, onDecide }: { call: ToolCall; ai: string; onDecide?: Decide }) {
   const [open, setOpen] = useState(false);
   const [sent, setSent] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -639,7 +708,7 @@ function CommandCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) 
       )}
       {pending && onDecide && (
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line bg-app px-3 py-2">
-          <span className="mr-auto text-[12px] text-muted">{sent ? "Sending…" : "DeepSeek wants to run this command"}</span>
+          <span className="mr-auto text-[12px] text-muted">{sent ? "Sending…" : `${ai} wants to run this command`}</span>
           {!sent && !editing && (
             <Button
               variant="ghost"
@@ -668,7 +737,7 @@ function CommandCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) 
       )}
       {running && r.procId && (
         <div className="flex items-center justify-end gap-2 border-t border-line bg-app px-3 py-1.5">
-          <span className="mr-auto text-[11.5px] text-faint">You can stop it any time; DeepSeek sees the output so far.</span>
+          <span className="mr-auto text-[11.5px] text-faint">You can stop it any time; {ai} sees the output so far.</span>
           <Button
             variant="secondary"
             disabled={stopping}
@@ -685,16 +754,18 @@ function CommandCard({ call, onDecide }: { call: ToolCall; onDecide?: Decide }) 
   );
 }
 
-function Step({ step, active, streaming, onDecide }: { step: AssistantStep; active: boolean; streaming: boolean; onDecide?: Decide }) {
+function Step({ step, ai, active, streaming, onDecide }: { step: AssistantStep; ai: string; active: boolean; streaming: boolean; onDecide?: Decide }) {
   return (
     <>
       {step.reasoning && <Thinking text={step.reasoning} active={active && !step.content && !step.toolCalls?.length} />}
       {step.content && <Markdown text={step.content} streaming={streaming && active && !step.toolCalls?.length} />}
       {step.toolCalls?.map((c) =>
-        EDIT_TOOLS.has(c.name) ? (
-          <EditCard key={c.id} call={c} onDecide={onDecide} />
-        ) : c.name === "run_command" ? (
-          <CommandCard key={c.id} call={c} onDecide={onDecide} />
+        EDIT_TOOLS.has(c.name) && !c.server ? (
+          <EditCard key={c.id} call={c} ai={ai} onDecide={onDecide} />
+        ) : c.name === "run_command" && !c.server ? (
+          <CommandCard key={c.id} call={c} ai={ai} onDecide={onDecide} />
+        ) : c.name === "code_execution" && c.server ? (
+          <CodeCard key={c.id} call={c} />
         ) : (
           <ToolCard key={c.id} call={c} />
         ),
@@ -703,10 +774,37 @@ function Step({ step, active, streaming, onDecide }: { step: AssistantStep; acti
   );
 }
 
+// Where a long chat's earlier messages were summarized. The AI continues from the summary.
+export function SummaryDivider({ summary, ai }: { summary: ChatSummaryNote; ai: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="my-2">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 text-[12px] text-faint hover:text-muted">
+        <span className="h-px flex-1 bg-line" />
+        <span className="inline-flex items-center gap-1.5">
+          <ScrollText size={13} /> Earlier messages summarized · {ai} continues from the summary
+          <ChevronRight size={12} className={clsx("transition-transform", open && "rotate-90")} />
+        </span>
+        <span className="h-px flex-1 bg-line" />
+      </button>
+      {open && (
+        <div className="mx-auto mt-2 max-w-2xl rounded-xl border border-line bg-surface px-4 py-3 text-[13px] leading-relaxed text-muted">
+          <div className="mb-1.5 text-[11.5px] text-faint">
+            Written by {labelFromId(summary.model)} · {formatCost(summary.cost)}. You still see every message; only what&apos;s sent to {ai} is shorter.
+          </div>
+          <Markdown text={summary.text} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const AssistantBlock = memo(function AssistantBlock({
   message,
   streaming,
   isLast,
+  status,
+  allowAuto = true,
   onRegenerate,
   onOpenSettings,
   onDecide,
@@ -717,6 +815,8 @@ export const AssistantBlock = memo(function AssistantBlock({
   message: AssistantMessage;
   streaming: boolean;
   isLast: boolean;
+  status?: string | null; // e.g. "Summarizing earlier messages…"
+  allowAuto?: boolean; // Auto mode is allowed for this provider
   onRegenerate: () => void;
   onOpenSettings: () => void;
   onDecide?: Decide;
@@ -725,11 +825,12 @@ export const AssistantBlock = memo(function AssistantBlock({
   onSave?: (mode: "new" | "append") => void;
 }) {
   const [saveOpen, setSaveOpen] = useState(false);
+  const ai = aiName(message.model);
   const text = message.steps.map((s) => s.content).filter(Boolean).join("\n\n");
   const pendingCalls = message.steps.flatMap((s) => s.toolCalls ?? []).filter((c) => c.status === "pending");
   // "Switch to Auto" grants code-editing rights, so only offer it when code changes are waiting
-  // (not just doc saves or commands).
-  const offerAuto = !!onApproveAll && pendingCalls.some((c) => c.diff && !c.diff.doc);
+  // (not just doc saves or commands), and only if Auto is allowed for this provider.
+  const offerAuto = !!onApproveAll && allowAuto && pendingCalls.some((c) => c.diff && !c.diff.doc);
   const waitingLabel = pendingCalls.every((c) => c.name === "run_command") ? "commands" : pendingCalls.some((c) => c.name === "run_command") ? "requests" : "changes";
   const changedFiles = new Set(message.changes?.map((c) => c.path) ?? []).size;
   const nothingYet = message.steps.every((s) => !s.content && !s.reasoning && !s.toolCalls?.length);
@@ -739,10 +840,11 @@ export const AssistantBlock = memo(function AssistantBlock({
       {streaming && nothingYet && (
         <div className="flex h-7 items-center gap-1.5 text-muted">
           <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+          {status && <span className="shimmer-text text-[13px]">{status}</span>}
         </div>
       )}
       {message.steps.map((s, i) => (
-        <Step key={i} step={s} active={streaming && i === message.steps.length - 1} streaming={streaming} onDecide={onDecide} />
+        <Step key={i} step={s} ai={ai} active={streaming && i === message.steps.length - 1} streaming={streaming} onDecide={onDecide} />
       ))}
       {pendingCalls.length > 1 && onDecide && (
         <div className="my-2 flex flex-wrap items-center gap-2 rounded-xl bg-accent-soft px-3 py-2 text-[12.5px] text-accent">
@@ -765,6 +867,11 @@ export const AssistantBlock = memo(function AssistantBlock({
         </button>
       )}
       {message.cutOff && <div className="mt-2 text-xs text-faint">Cut off here to take in your new message</div>}
+      {message.fallback && (
+        <div className="mt-2 text-xs text-faint" title="The first model declined this request; another Claude model answered it instead (billed at that model's price).">
+          Answered by another Claude model: {message.fallback}
+        </div>
+      )}
       {message.stopped && <div className="mt-2 text-xs text-faint">Stopped</div>}
       {message.error && (
         <div className="mt-2 flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger-soft px-3.5 py-2.5 text-[13.5px] text-danger">
@@ -851,11 +958,13 @@ export const AssistantBlock = memo(function AssistantBlock({
             </button>
           )}
           <span className="ml-2 text-[11.5px] text-faint">
-            {MODELS[message.model]?.label ?? message.model}
+            {labelFromId(message.model)}
             {message.usage && message.usage.completionTokens > 0 && (
               <>
                 {" · "}
-                {formatTokens(message.usage.completionTokens)} tokens out · {formatCost(message.usage.cost)}
+                {formatTokens(message.usage.completionTokens)} tokens out ·{" "}
+                {message.usage.priceUnknown ? "price not known yet" : formatCost(message.usage.cost)}
+                {message.usage.searches ? ` · ${message.usage.searches} search${message.usage.searches === 1 ? "" : "es"}` : ""}
               </>
             )}
           </span>

@@ -128,3 +128,38 @@ export function chooseExistingFile(prompt: string): Promise<DialogResult> {
   }
   return Promise.resolve({ error: UNSUPPORTED });
 }
+
+// ---------- Opening things in other apps ----------
+
+function run(cmd: string, args: string[], env: Record<string, string> = {}): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: 30_000, env: { ...process.env, ...env }, windowsHide: true }, (err, _out, stderr) =>
+      resolve(err ? stderr.trim() || err.message : null),
+    );
+  });
+}
+
+const winRun = (script: string, file: string) =>
+  run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference = 'Stop'\n" + script], {
+    DS_PATH: file,
+  });
+
+// Opens a text file in your text editor: the app your computer uses for that kind of file, or
+// the standard text editor when none is set (TextEdit on a Mac, Notepad on Windows).
+export async function openInEditor(file: string): Promise<string | null> {
+  if (process.platform === "darwin") {
+    if (!(await run("open", [file]))) return null;
+    return run("open", ["-t", file]);
+  }
+  if (process.platform === "win32") {
+    return winRun("try { Start-Process -FilePath $env:DS_PATH } catch { Start-Process notepad.exe -ArgumentList ('\"' + $env:DS_PATH + '\"') }", file);
+  }
+  return run("xdg-open", [file]);
+}
+
+// Shows a folder in Finder or File Explorer.
+export function openFolder(dir: string): Promise<string | null> {
+  if (process.platform === "darwin") return run("open", [dir]);
+  if (process.platform === "win32") return winRun("Invoke-Item -LiteralPath $env:DS_PATH", dir);
+  return run("xdg-open", [dir]);
+}

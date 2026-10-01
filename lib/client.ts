@@ -78,8 +78,15 @@ function looksBinary(text: string): boolean {
   return text.slice(0, 8000).includes("\u0000");
 }
 
+// Data files Claude's code sandbox can open (when Code is on in a Claude chat). Spreadsheets
+// can't be read as text, so they only work there.
+const DATA_FILE = /\.(csv|tsv|json|xml|xlsx|xls|parquet)$/i;
+const SANDBOX_ONLY = /\.(xlsx|xls|parquet)$/i;
+const MAX_FILE_BYTES = 30 * 1024 * 1024;
+
 // Convert one file into an attachment. Throws with a readable message if it can't be used.
-export async function fileToAttachment(file: File, name = file.name): Promise<Attachment> {
+// sandbox: the chat can run code (Claude with Code on), so data files also go into its sandbox.
+export async function fileToAttachment(file: File, name = file.name, opts: { sandbox?: boolean } = {}): Promise<Attachment> {
   const id = nanoid(10);
   const lower = name.toLowerCase();
   if (IMAGE_TYPES.has(file.type)) {
@@ -91,14 +98,21 @@ export async function fileToAttachment(file: File, name = file.name): Promise<At
     const form = new FormData();
     form.append("file", file);
     const { text } = await api<{ text: string }>("/api/extract", { method: "POST", body: form });
+    // PDFs keep the file too: Claude reads the pages themselves (scans, charts, tables).
+    if (lower.endsWith(".pdf") && file.size <= MAX_FILE_BYTES) return { id, name, kind: "file", size: text.length, content: text, dataUrl: await readAsDataUrl(file) };
     return { id, name, kind: "file", size: text.length, content: text };
   }
   if (lower.endsWith(".heic") || lower.endsWith(".heif")) throw new Error(`${name}: HEIC photos aren't supported — export as JPG or PNG`);
+  if (SANDBOX_ONLY.test(lower)) {
+    if (!opts.sandbox) throw new Error(`${name}: spreadsheets only work in a Claude chat with Code switched on`);
+    if (file.size > MAX_FILE_BYTES) throw new Error(`${name} is too large (over 30 MB)`);
+    return { id, name, kind: "file", size: file.size, dataUrl: await readAsDataUrl(file), sandbox: true };
+  }
   if (isBinaryName(name)) throw new Error(`${name} isn't a text file, image, PDF or Word document`);
   if (file.size > 20 * 1024 * 1024) throw new Error(`${name} is too large (over 20 MB)`);
   const text = await file.text();
   if (looksBinary(text)) throw new Error(`${name} looks like a binary file`);
-  return { id, name, kind: "file", size: text.length, content: text };
+  return { id, name, kind: "file", size: text.length, content: text, ...(opts.sandbox && DATA_FILE.test(lower) ? { sandbox: true } : {}) };
 }
 
 // ---------- Dropped folders ----------
@@ -147,8 +161,9 @@ export async function walkDroppedFolder(root: FileSystemDirectoryEntry, limit = 
   return out;
 }
 
-export function estimateAttachmentTokens(a: Pick<Attachment, "kind" | "size" | "content">): number {
+export function estimateAttachmentTokens(a: Pick<Attachment, "kind" | "size" | "content" | "sandbox">): number {
   if (a.kind === "image") return 1000;
+  if (a.sandbox && a.content === undefined) return 50; // only goes into the code sandbox
   return Math.ceil((a.content?.length ?? a.size) / 4);
 }
 
