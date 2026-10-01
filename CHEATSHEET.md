@@ -23,6 +23,8 @@ Everything you need, in one place. Type the commands in **Terminal**.
 | `deepseek-chat restart` | Stops, rebuilds if the code changed, and starts again. Use it after code changes or if something acts weird. |
 | `deepseek-chat logs` | Shows the server log live (press Ctrl + C to exit) |
 
+**Getting updates**, in the app folder: `deepseek-chat stop`, then `git pull`, then `npm ci`, then `deepseek-chat` (it rebuilds, a few minutes).
+
 The app lives at **http://127.0.0.1:3456** and is only reachable from your Mac.
 
 **Setting it up on another Mac:** in the app folder, run `npm ci`, then `zsh scripts/mac/install.sh`. That adds the `deepseek-chat` command and the **DeepSeek Chat** app.
@@ -36,20 +38,25 @@ npm ci
 powershell -ExecutionPolicy Bypass -File scripts\windows\install.ps1
 ```
 
-This adds **DeepSeek Chat** to your Desktop and Start menu, and the `deepseek-chat` command to new terminals. If `deepseek-chat` "is not recognized", close every terminal window and open a new one, or run `scripts\windows\deepseek-chat.cmd` from the app folder.
+This adds **DeepSeek Chat** to your Desktop and Start menu, and the `deepseek-chat` command to new terminals. After that, the same commands as on the Mac work: `deepseek-chat`, `deepseek-chat start`, `status`, `stop`, `restart`, `logs`. The app opens in its own Chrome or Edge window.
 
-To get updates: `deepseek-chat stop`, then `git pull`, then `npm ci`, then `deepseek-chat` (it rebuilds). Stop it first: Windows locks the files of a running app, so `npm ci` would fail. After that, the same commands as on the Mac work: `deepseek-chat`, `deepseek-chat start`, `status`, `stop`, `restart`, `logs`. The app opens in its own Chrome or Edge window.
+- **The first start builds the app**: a few minutes, showing only "Building the app…". Don't close the window or press Ctrl + C; it opens by itself.
+- **If `deepseek-chat` "is not recognized"**: close every terminal window and open a new one, or run `scripts\windows\deepseek-chat.cmd` from the app folder.
+- **Getting updates**, in the app folder: `deepseek-chat stop`, then `git pull`, then `npm ci`, then `deepseek-chat` (it rebuilds). Stop it first: Windows locks the files of a running app, so `npm ci` would fail.
+- Step-by-step setup, updates and fixes for both systems are in the README under **Install and run**.
 
-- **Keys** are saved encrypted with your Windows login (Windows' equivalent of the Keychain). Paste them in **Settings**.
+- **Keys** are saved encrypted with your Windows login (Windows' equivalent of the Keychain). Paste them in **Settings → AI providers**.
 - **Choose folder…** and **Save** use Windows' own dialogs.
 - The `security …` Keychain commands in section 3 are Mac-only. On Windows, manage keys in **Settings**.
 - **Terminal** works the same, except Windows has no sandbox: look-only commands (`dir`, `git status`…) run straight away, and **every other command asks you first, even in Auto mode**. The Internet switch is greyed out because it can't be enforced. Commands run in PowerShell.
 
 ## 3. API keys
 
-Keys are stored in the **macOS Keychain**, never in a file. The easiest way: in the app, open **Settings** (bottom-left) and paste the key.
+Keys are stored in the **macOS Keychain**, never in a file. The easiest way: in the app, open **Settings → AI providers** (bottom-left), paste the key and click **Save key**. **Remove** deletes it from this computer; your chats are kept.
 
-**DeepSeek key** (required). Get one at platform.deepseek.com → API keys.
+You need **at least one** of DeepSeek or Claude. With both, **Settings → Defaults for new chats** picks which one new chats use.
+
+**DeepSeek key.** Get one at platform.deepseek.com → API keys.
 
 | I want to… | Command |
 |---|---|
@@ -57,31 +64,46 @@ Keys are stored in the **macOS Keychain**, never in a file. The easiest way: in 
 | Check a key is saved | `security find-generic-password -s deepseek-api-key` |
 | Remove the key | `security delete-generic-password -s deepseek-api-key` |
 
-**Tavily key** (only for web search). Free at app.tavily.com: 1,000 searches a month, no card.
+**Claude key.** Get one at console.anthropic.com → API keys. It's billed per use, separately from a Claude.ai plan.
+
+| I want to… | Command |
+|---|---|
+| Add or replace the key | `security add-generic-password -U -a "$USER" -s anthropic-api-key -w` |
+| Check a key is saved | `security find-generic-password -s anthropic-api-key` |
+| Remove the key | `security delete-generic-password -s anthropic-api-key` |
+
+**Tavily key** (only for DeepSeek's web search; Claude has its own). Free at app.tavily.com: 1,000 searches a month, no card.
 
 | I want to… | Command |
 |---|---|
 | Add or replace the key | `security add-generic-password -U -a "$USER" -s tavily-api-key -w` |
-| Remove the key | `security delete-generic-password -s tavily-api-key
-security delete-generic-password -s github-token` |
+| Remove the key | `security delete-generic-password -s tavily-api-key` |
+
+**GitHub token**: paste it in **Settings → GitHub** (the steps are there). Remove it with `security delete-generic-password -s github-token`.
 
 ## 4. Using the app
 
-**Models:** pick from the dropdown next to the send button. That's the only way to switch in the app.
+**Models:** pick from the dropdown next to the send button, per chat. New chats start with the one set in **Settings → Defaults for new chats**. The Claude list comes from your key, so every model it can use is there.
 
 | Model | Good for | Cost |
 |---|---|---|
-| **V4.1 Flash** (default) | Everyday use. Fast, and can see images. | Cheapest |
-| **V4 Pro** | Hard problems. Text only. | About 4× Flash |
+| **DeepSeek V4.1 Flash** | Everyday use. Fast, and can see images. | Cheapest |
+| **DeepSeek V4 Pro** | Hard problems. Text only. | About 4× Flash |
+| **Claude Haiku** | Quick, simple jobs | Cheapest Claude |
+| **Claude Sonnet** | Everyday work, coding | Middle |
+| **Claude Opus** | Hard problems, long tasks | Higher |
+| **Claude Fable** | The hardest problems | Highest |
 
 **Buttons next to the message box**
 
 | Button | What it does |
 |---|---|
 | **+** | Upload files or images, or **Add a folder…** |
-| **Think** | DeepSeek reasons step by step before answering. Better for hard questions, but slower and uses more tokens. Effort (High / Max) is in the model dropdown. |
-| **Search** | DeepSeek can search the web and cite sources. Only visible when turned on in **Settings → Web search**. Off by default in each chat. |
-| **Token ring** | Hover it to see how full the chat is and what it has cost |
+| **Think** | The AI reasons step by step before answering. Better for hard questions, but slower and uses more tokens. Effort is in the model dropdown (DeepSeek: High / Max; Claude: Low to Max). The newest Opus and Fable always think. |
+| **Search** | The AI can search the web and cite sources. DeepSeek: only visible when turned on in **Settings → Web search for DeepSeek** (Tavily key). Claude: its own search, $10 per 1,000 searches. Off by default in each chat. |
+| **Code** (Claude) | Claude runs Python in Anthropic's sandbox (not on your computer) for sums, charts and data files you attach. Charts it makes appear under the reply to download. |
+| **Token ring** | Hover it to see how full the chat is and what it has cost. **Summarize** there shortens a long chat now. |
+| Greyed-out button | Not allowed for this AI: **Settings → AI providers → What … may do**. Clicking it takes you there. |
 | **■** | Stops the reply in this chat (or press Esc). Other chats keep going. |
 
 **Files and folders**
@@ -90,6 +112,18 @@ security delete-generic-password -s github-token` |
 - **+ → Add a folder… → Attach selected:** pick specific files from a checklist.
 - Type **@** to mention a file from the open project folder.
 - `.env` files and other secrets are always blocked.
+
+**What each AI may do** (Settings → AI providers): switches for Read folders, Change files, Auto mode, Run commands, Read GitHub, Save to Docs, Web search and (Claude) Code execution. **Claude starts with all of them off**; DeepSeek starts with them on. They apply on top of each project's and chat's own switches: off means off.
+
+**Long chats** (Settings → Long chats): past 200K tokens (sooner for models with a smaller context), the earlier messages are summarized so the chat can keep going, for DeepSeek and Claude. A line in the chat shows where. Editing a message from before that line drops the summary.
+
+**Skills** (Settings → Skills, and Project settings → Skills)
+- A skill is a folder with a `SKILL.md`: a name, a one-line description of when to use it, then your instructions (how you like it done, a checklist, a template). Same format as Claude Code and Claude.ai.
+- The AI (DeepSeek or Claude) sees only the names and descriptions and opens a skill when a task matches. It can only read skills.
+- **Your skills** live in the app's `data/skills` folder, so they move with it. **New skill** makes one and opens it in your text editor; the **pencil** opens it again. **Import folder…** / **Import .zip…** bring skills in. **Open folder** shows them in Finder.
+- **Also use a folder on this computer:** e.g. Claude Code's `~/.claude/skills` (one click). Those stay on this computer; the copy button next to one copies it into your skills.
+- **Projects** can have their own skills (kept with the project), and automatically use any `.claude/skills` folder inside their folders (those travel with your code). Switch **Also use my skills** or single skills off per project.
+- Same name in two places: the project's own wins, then the one in its code, then yours.
 
 **Messages:** hover your message → **Edit** to change and resend it. **Retry** under a reply gets a new answer. **Save** under a reply saves it to a file you choose (new file, or add to the end of an existing one).
 
@@ -202,6 +236,10 @@ This is **not** the app. It's Claude Code (a text-only coding assistant that run
 | "DeepSeek rejected your API key" | Settings → paste the key again → it's tested automatically |
 | "Your DeepSeek balance has run out" | Top up at platform.deepseek.com |
 | "Can't reach DeepSeek" | Check your internet connection, then press **Retry** |
+| "Claude rejected your API key" | Settings → AI providers → paste the Claude key again |
+| "Your Claude credit balance is too low" | Add credit at console.anthropic.com → Billing |
+| A button is greyed out (Search, Code, GitHub, a mode) | **Settings → AI providers → What … may do** → switch it on → Save |
+| A skill isn't used | Check its switch in Settings → Skills (or Project settings), and that its description says when to use it. A ⚠ marks skills to fix. |
 | Search button missing | Settings → Web search → turn it on → Save |
 | Search button does nothing | Settings → Web search → add your Tavily key |
 | DeepSeek made a change you don't want | Click **Undo changes** under that reply |
@@ -226,11 +264,12 @@ This is **not** the app. It's Claude Code (a text-only coding assistant that run
 | Docs DeepSeek saves | `~/Documents/DeepSeek Docs` by default (change in Settings or per project) |
 | Backups for Undo | `…/data/backups/` |
 | Settings | `…/data/settings.json` |
+| Your skills | `…/data/skills/` (a project's own: `…/data/project-skills/`) |
 | Server logs | `…/data/server.log` |
 | App launcher | `~/Applications/DeepSeek Chat.app` |
 | Commands | `~/.local/bin/deepseek-chat` (set up by `scripts/mac/install.sh`, linked to `scripts/mac/deepseek-chat`) and `~/.local/bin/deepseek` |
 
-**Back up your chats** by copying the `data/` folder.
+**Back up your chats** (and projects, skills and settings) by copying the `data/` folder. Copying it to another computer brings everything along except the keys: paste those again in Settings there.
 
 ## 8. For editing the code
 
@@ -248,5 +287,7 @@ deepseek-chat stop
 rm -rf ~/Applications/"DeepSeek Chat.app" ~/.local/bin/deepseek-chat ~/.local/bin/deepseek
 security delete-generic-password -s deepseek-api-key
 security delete-generic-password -s tavily-api-key
+security delete-generic-password -s anthropic-api-key
+security delete-generic-password -s github-token
 ```
 Then delete the `UI-DeepSeek` folder (back up `data/` first if you want your chats).
