@@ -42,6 +42,7 @@ export interface ToolAccess {
   terminal?: TerminalAccess | null; // it may run commands in the project's folders
   code?: boolean; // Claude: code execution in Anthropic's sandbox
   skills?: SkillInfo[]; // skills it can open with use_skill
+  runFreely?: boolean; // "Run commands without asking" is on in this chat (Edit/Auto)
 }
 
 // Claude's own web tools have different names from the app's (Tavily) ones.
@@ -50,13 +51,14 @@ const webToolNames = (access: ToolAccess) => (access.provider === "claude" ? "we
 const NO_COMMANDS = "You can't run commands; tell the user what to run to test.";
 const WITH_COMMANDS = "You can run commands with run_command (see Terminal below): use it to run tests and builds when that helps.";
 
-function terminalPrompt(t: TerminalAccess, mode: Mode): string {
+function terminalPrompt(t: TerminalAccess, mode: Mode, runFreely: boolean): string {
   const many = t.roots.length > 1;
   const where = many ? t.roots.map((r) => `\`${r.name}\` (${r.abs})`).join(", ") : `\`${t.roots[0].abs}\``;
   const readOnly = mode === "ask" || mode === "plan";
   const shell = t.platform === "windows" ? `${t.shell} (Windows)` : "zsh (macOS)";
-  const asking =
-    t.platform === "mac"
+  const asking = runFreely
+    ? "Other commands also run without asking right now (the user switched that on for this chat), except risky ones (deleting folders, throwing away work, publishing, secret files), which still ask."
+    : t.platform === "mac"
       ? mode === "auto"
         ? "In Auto mode other commands run without asking, except risky ones (deleting folders, throwing away work, publishing, secret files), which always ask."
         : "Other commands ask the user first, unless they've chosen to always allow them."
@@ -73,6 +75,7 @@ function terminalPrompt(t: TerminalAccess, mode: Mode): string {
         : "",
     `- Internet: ${t.internet ? "on" : "off. Installs, downloads and git fetch/pull won't work; if a task needs them, tell the user they can turn on Internet in the project settings"}.`,
     "- GitHub is read-only: git push, the gh command line and saved git logins aren't available. Never try to change anything on GitHub.",
+    "- git reset --hard never runs (it throws away uncommitted work). Use git stash or a new branch instead.",
     "- Commands can't read input: use non-interactive flags (--yes, -y) and run test runners once, not in watch mode (e.g. `vitest run`, `jest --watchAll=false`).",
     `- Each command can run for up to ${t.minutes} minutes. For servers and watchers (e.g. npm run dev), set background: true, then use check_command to read their output and stop_command when you're done. Don't use &, nohup or similar: they're blocked.`,
     "- Long output is cut down to its start and end, so narrow it where you can (e.g. `| tail -50`, a quiet flag).",
@@ -200,7 +203,7 @@ export async function systemPrompt(chat: Chat, settings: Settings, access: ToolA
       (access.terminal ? MODE_PROMPTS[access.mode].replace(NO_COMMANDS, WITH_COMMANDS) : MODE_PROMPTS[access.mode]) +
       (maps.some(Boolean) ? `\n\nTop of the folder map${roots.length > 1 ? "s" : ""}:\n\`\`\`\n${maps.filter(Boolean).join("\n\n")}\n\`\`\`` : "");
   }
-  if (access.terminal) prompt += terminalPrompt(access.terminal, access.mode);
+  if (access.terminal) prompt += terminalPrompt(access.terminal, access.mode, !!access.runFreely);
   if (access.docs) {
     prompt +=
       `\n\n## Docs folder\n` +

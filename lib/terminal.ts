@@ -138,9 +138,9 @@ export function recheck(run: CommandRun, command: string, access: TerminalAccess
   return { ...run, command, edited: true, level: v.level, reason: v.reason, rule: undefined, status: v.level === "blocked" ? "blocked" : run.status };
 }
 
-export function approvalNeeded(run: CommandRun, access: TerminalAccess, mode: Mode, rules: string[]): boolean {
+export function approvalNeeded(run: CommandRun, access: TerminalAccess, mode: Mode, rules: string[], noAsk = false): boolean {
   const allowed = matchesRule(run.command, rules, access.platform);
-  return needsApproval({ level: run.level }, { mode, platform: access.platform, allowed });
+  return needsApproval({ level: run.level }, { mode, platform: access.platform, allowed, noAsk });
 }
 
 // ---------- Running it ----------

@@ -73,6 +73,8 @@ export async function resolveAccess(chat: Chat, settings: Settings, req: Request
     ...(terminal ? COMMAND_TOOLS : []),
     ...(skills.length ? SKILL_TOOLS : []),
   ];
-  const access: ToolAccess = { provider, roots, web, mode, docs: docsPath, github: github ? repos : [], terminal, code, skills };
+  // "Run commands without asking": the chat's switch, in Edit and Auto mode, where Auto is allowed.
+  const runFreely = !!terminal && editing && limits.auto && !!chat.runWithoutAsking;
+  const access: ToolAccess = { provider, roots, web, mode, docs: docsPath, github: github ? repos : [], terminal, code, skills, runFreely };
   return { provider, limits, project, roots, mode, editing, web, docsPath, repos, github, terminal, code, skills, tools, access };
 }

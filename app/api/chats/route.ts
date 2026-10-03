@@ -29,6 +29,7 @@ export async function POST(req: Request) {
     github: body.github === true,
     code: body.code === true,
     mode: body.mode === "plan" || body.mode === "edit" || body.mode === "auto" ? body.mode : "ask",
+    runWithoutAsking: body.runWithoutAsking === true,
     projectId: project?.id ?? null,
   });
   return Response.json(chat);

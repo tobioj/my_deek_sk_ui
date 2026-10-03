@@ -655,6 +655,7 @@ function CommandCard({ call, ai, onDecide }: { call: ToolCall; ai: string; onDec
     r.sandboxed ? `sandboxed${r.readOnly ? ", look only" : ""}` : "not sandboxed (Windows)",
     r.sandboxed ? `internet ${r.internet ? "on" : "off"}` : "",
     r.background ? "background" : "",
+    r.unasked ? "ran without asking" : "",
   ].filter(Boolean);
   const decide = (d: "approve" | "reject" | "approve_remember") => {
     setSent(true);

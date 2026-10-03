@@ -311,6 +311,11 @@ function blockedReason(p: Program, platform: Platform): string | null {
   if (n === "git") {
     const sub = gitSubcommand(p.args);
     if (sub === "push") return "GitHub stays read-only: git push can't run here. Push from your own terminal";
+    // Also when it's hidden in a one-off alias (git -c alias.x="reset --hard" x).
+    const hardAlias = p.args.some((a, i) => p.args[i - 1] === "-c" && /^alias\./i.test(a) && /\breset\b[^]*--hard\b/.test(a));
+    if ((sub === "reset" && p.args.slice(p.args.indexOf(sub) + 1).includes("--hard")) || hardAlias) {
+      return "git reset --hard never runs here: it throws away uncommitted work. Use git stash (or a new branch) instead, or run it yourself in your own terminal";
+    }
     if (sub === "send-email" || sub === "request-pull") return "git can't send anything from here";
     if (sub === "credential" || sub === "credential-osxkeychain" || sub === "credential-manager") return "git logins can't be read here";
   }
@@ -378,7 +383,6 @@ function alwaysAskReason(p: Program, platform: Platform): string | null {
     const sub = gitSubcommand(args);
     const rest = args.slice(args.indexOf(sub) + 1);
     if (sub === "clean") return "Deletes untracked files, and commands can't be undone";
-    if (sub === "reset" && rest.includes("--hard")) return "Throws away uncommitted work";
     if (sub === "checkout" && (rest.includes(".") || rest.includes("--") || rest.includes("-f") || rest.includes("--force"))) return "Throws away uncommitted work";
     if (sub === "restore" && !(rest.includes("--staged") && !rest.includes("--worktree"))) return "Throws away uncommitted work";
     if (sub === "stash" && (rest[0] === "drop" || rest[0] === "clear")) return "Deletes saved stashes";
@@ -652,11 +656,12 @@ export function classifyCommand(cmd: string, platform: Platform, appPorts: numbe
 }
 
 // Does this command need your click before it runs?
-export function needsApproval(v: Verdict, opts: { mode: Mode; platform: Platform; allowed: boolean }): boolean {
+// `noAsk`: "Run commands without asking" is on in this chat (Edit and Auto mode only; risky ones still ask).
+export function needsApproval(v: Verdict, opts: { mode: Mode; platform: Platform; allowed: boolean; noAsk?: boolean }): boolean {
   if (v.level === "look") return false;
   if (v.level !== "ask") return true; // always_ask (blocked never gets this far)
   if (opts.mode === "ask" || opts.mode === "plan") return true;
-  if (opts.allowed) return false; // matches one of your "Always allow" rules
+  if (opts.allowed || opts.noAsk) return false; // one of your "Always allow" rules, or the chat's switch
   if (opts.platform !== "mac") return true; // no sandbox: always ask
   return opts.mode !== "auto";
 }

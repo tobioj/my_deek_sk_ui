@@ -57,6 +57,7 @@ type Prefs = {
   code: boolean;
   mode: Mode;
   autoApprove: boolean;
+  runWithoutAsking: boolean; // "Run commands without asking" (Edit and Auto mode)
   projectId: string | null;
 };
 type SettingsData = {
@@ -140,6 +141,7 @@ export function ChatApp() {
     code: false,
     mode: "ask",
     autoApprove: false,
+    runWithoutAsking: false,
     projectId: null,
   });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -373,6 +375,7 @@ export function ChatApp() {
         code: false,
         mode: "ask",
         autoApprove: false,
+        runWithoutAsking: false, // off in every new chat
         projectId: projectId,
       }));
       if (projectId) {
@@ -418,6 +421,7 @@ export function ChatApp() {
         code: !!chat.code,
         mode: chat.mode === "edit" && chat.autoApprove ? "auto" : (chat.mode ?? "ask"),
         autoApprove: !!chat.autoApprove,
+        runWithoutAsking: !!chat.runWithoutAsking,
         projectId: chat.projectId ?? null,
       }
     : draftPrefs;
@@ -520,6 +524,7 @@ export function ChatApp() {
               code: saved.code,
               mode: saved.mode,
               autoApprove: saved.autoApprove,
+              runWithoutAsking: saved.runWithoutAsking,
               projectId: saved.projectId,
             }
           : c,
@@ -1238,6 +1243,13 @@ export function ChatApp() {
       githubState={githubState}
       onGithubSetup={() => (githubState === "no-repos" && project ? openProjectSettings(project.id) : setSettingsOpen(true))}
       mode={mode}
+      runFreely={
+        // Where the AI can run commands, in Edit and Auto mode. (Auto on the Mac already runs them
+        // without asking, inside the sandbox.)
+        terminalOn && limits.commands && limits.folders && isEditingMode(mode) && !(platform === "mac" && mode === "auto") && linked.some((f) => !f.hidden && f.source === "project")
+          ? { on: prefs.runWithoutAsking && limits.auto, allowed: limits.auto, sandboxed: platform === "mac" }
+          : null
+      }
       gitChanged={isEditingMode(mode) ? gitChanged : 0}
       clash={clash}
       searchShown={info.provider === "claude" || !!settings?.webSearch}

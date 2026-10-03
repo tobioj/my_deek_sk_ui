@@ -48,7 +48,7 @@ This adds **DeepSeek Chat** to your Desktop and Start menu, and the `deepseek-ch
 - **Keys** are saved encrypted with your Windows login (Windows' equivalent of the Keychain). Paste them in **Settings → AI providers**.
 - **Choose folder…** and **Save** use Windows' own dialogs.
 - The `security …` Keychain commands in section 3 are Mac-only. On Windows, manage keys in **Settings**.
-- **Terminal** works the same, except Windows has no sandbox: look-only commands (`dir`, `git status`…) run straight away, and **every other command asks you first, even in Auto mode**. The Internet switch is greyed out because it can't be enforced. Commands run in PowerShell.
+- **Terminal** works the same, except Windows has no sandbox: look-only commands (`dir`, `git status`…) run straight away, and **every other command asks you first, even in Auto mode**, unless you switch on **Run without asking** in the chat (see Terminal below). The Internet switch is greyed out because it can't be enforced. Commands run in PowerShell.
 
 ## 3. API keys
 
@@ -149,10 +149,11 @@ You need **at least one** of DeepSeek or Claude. With both, **Settings → Defau
 | Kind of command | What happens |
 |---|---|
 | Look-only (`ls`, `cat`, `grep`, `git status/diff/log`…) | Runs straight away, in every mode |
-| Most commands (`npm test`, `npm run build`…) | **Asks first** in Ask, Plan and Edit. Runs without asking in **Auto** (Mac). Click **Always allow** on the card to stop asking for that command in this project; remove it in Project settings. |
-| Risky (deleting folders, `git reset --hard`, publishing, anything touching `.env`) | Always asks, even in Auto |
-| Never (`sudo`, `git push`, `gh`, `curl … \| sh`, running things in the background with `&`) | Refused, even if you approve |
+| Most commands (`npm test`, `npm run build`…) | **Asks first** in Ask, Plan and Edit. Runs without asking in **Auto** (Mac), or in Edit and Auto when the chat's **Run without asking** switch is on. Click **Always allow** on the card to stop asking for that command in this project; remove it in Project settings. |
+| Risky (deleting folders, `git clean`, publishing, anything touching `.env`) | Always asks, even in Auto or with **Run without asking** on |
+| Never (`sudo`, `git push`, `git reset --hard`, `gh`, `curl … \| sh`, running things in the background with `&`) | Refused, even if you approve |
 
+- **Run without asking** (the switch at the right of the folder row, above the message box, in Edit and Auto mode): for a stretch of work where you don't want to click Run on every command, like implementing a plan and testing it. When it's on (amber), ordinary commands run straight away in that chat and their cards say *ran without asking*; risky ones still ask and blocked ones never run. It's off in every new chat and stays on in that chat until you switch it off. It needs **Auto mode** allowed for that AI in Settings. On the Mac, Auto mode already runs commands without asking, so the switch shows in Edit mode only.
 - On the approval card: **Run**, **Don't run**, **Edit** (change the command first) or **Always allow**. What a command changes can't be undone with **Undo**, so keep your project in Git.
 - In **Ask** and **Plan** mode, commands can only look: on the Mac even the project folder is read-only to them.
 - **Time limit:** 10 minutes per command by default (30 or 60 in Project settings). If a command is stopped, DeepSeek still gets the output so far.

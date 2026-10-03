@@ -34,6 +34,7 @@ export async function PATCH(req: Request, ctx: RouteContext<"/api/chats/[id]">) 
     if (typeof body.webSearch === "boolean") c.webSearch = body.webSearch;
     if (typeof body.github === "boolean") c.github = body.github;
     if (typeof body.code === "boolean") c.code = body.code;
+    if (typeof body.runWithoutAsking === "boolean") c.runWithoutAsking = body.runWithoutAsking;
     if (body.mode === "ask" || body.mode === "plan" || body.mode === "edit" || body.mode === "auto") {
       c.mode = body.mode;
       c.autoApprove = false; // picking a mode replaces the old "always approve" flag

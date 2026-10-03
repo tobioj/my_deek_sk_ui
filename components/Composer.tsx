@@ -19,6 +19,7 @@ import {
   ScrollText,
   Square,
   SquareCode,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import { nanoid } from "nanoid";
@@ -57,8 +58,9 @@ export interface ComposerProps {
   thinking: boolean;
   effort: Effort;
   code: boolean; // Claude: code execution in Anthropic's sandbox
-  onPrefs: (p: Partial<{ model: ModelId; thinking: boolean; effort: Effort; webSearch: boolean; github: boolean; code: boolean; mode: Mode }>) => void;
+  onPrefs: (p: Partial<{ model: ModelId; thinking: boolean; effort: Effort; webSearch: boolean; github: boolean; code: boolean; mode: Mode; runWithoutAsking: boolean }>) => void;
   mode: Mode; // Ask / Plan / Edit / Auto for the project folder
+  runFreely: { on: boolean; allowed: boolean; sandboxed: boolean } | null; // "Run commands without asking" (null = not offered here)
   gitChanged: number; // uncommitted changes in the project folder (0 if none / not a repo)
   clash?: { title: string; folder: string } | null; // another chat is changing the same folder right now
   webSearch: boolean; // this chat's Search toggle
@@ -295,6 +297,7 @@ export function Composer(p: ComposerProps) {
                 })()}
               </span>
             )}
+            {p.runFreely && <RunFreelySwitch {...p.runFreely} ai={p.ai} onChange={(v) => p.onPrefs({ runWithoutAsking: v })} onLimitOff={() => p.onLimitOff("auto")} />}
           </div>
         )}
         {editing && p.gitChanged > 0 && (
@@ -747,5 +750,50 @@ function Row({ k, v }: { k: string; v: string }) {
       <span className="text-muted">{k}</span>
       <span className="font-medium tabular-nums">{v}</span>
     </div>
+  );
+}
+
+// "Run commands without asking": for a stretch of work where you don't want to click Run on every
+// command. Edit and Auto mode only; risky commands still ask, and blocked ones never run.
+function RunFreelySwitch({
+  on,
+  allowed,
+  sandboxed,
+  ai,
+  onChange,
+  onLimitOff,
+}: {
+  on: boolean;
+  allowed: boolean;
+  sandboxed: boolean;
+  ai: string;
+  onChange: (v: boolean) => void;
+  onLimitOff: () => void;
+}) {
+  const title = !allowed
+    ? `Needs Auto mode allowed for ${ai} in Settings → AI providers.`
+    : on
+      ? `On: ${ai}'s commands run without asking in this chat. Risky ones (deleting folders, publishing, secret files) still ask; git push and git reset --hard never run. Click to be asked again.`
+      : `Off: ${ai}'s commands ask before they run. Click to let them run without asking in this chat.` +
+        (sandboxed ? "" : " There's no sandbox on Windows: commands can reach anything your Windows account can.");
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label="Run commands without asking"
+      title={title}
+      onClick={() => (allowed ? onChange(!on) : onLimitOff())}
+      className={clsx(
+        "ml-auto flex h-8 items-center gap-2 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors",
+        !allowed ? "border-dashed border-line text-faint" : on ? "border-warn/40 bg-warn/15 text-warn" : "border-line text-muted hover:bg-hover hover:text-fg",
+      )}
+    >
+      <SquareTerminal size={14} className="shrink-0" />
+      <span className="max-sm:hidden">Run without asking</span>
+      <span className={clsx("relative h-3.5 w-6 shrink-0 rounded-full transition-colors", on ? "bg-warn" : "bg-line-strong")}>
+        <span className={clsx("absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-all", on ? "left-3" : "left-0.5")} />
+      </span>
+    </button>
   );
 }

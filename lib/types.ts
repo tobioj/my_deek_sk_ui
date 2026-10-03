@@ -71,6 +71,7 @@ export interface CommandRun {
   durationMs?: number;
   output?: string; // what it printed (start and end, if long)
   edited?: boolean; // you changed the command before running it
+  unasked?: boolean; // ran without asking because "Run commands without asking" was on in this chat
 }
 
 // A command in the Running list (started by DeepSeek or by ▶ Run).
@@ -195,6 +196,7 @@ export interface Chat {
   code?: boolean; // Claude may run code in Anthropic's sandbox (only if allowed in Settings)
   container?: { id: string; expiresAt?: string | null }; // Claude's code sandbox for this chat, reused between replies
   autoApprove?: boolean; // older chats: Edit mode with "always approve" (now the same as Auto)
+  runWithoutAsking?: boolean; // commands run without asking in Edit and Auto mode (risky ones still ask)
   projectId?: string | null;
   summary?: ChatSummaryNote; // earlier messages were summarized (long chats)
   extraCost?: number; // USD spent outside replies (summaries)

@@ -508,12 +508,17 @@ export async function POST(req: Request) {
               const autoCode = latestSettings.limits[provider].auto && (mode === "auto" || latest?.mode === "auto" || !!latest?.autoApprove);
               const commandMode: Mode = autoCode && isEditingMode(mode) ? "auto" : mode;
               const rules = latestProject?.allowedCommands ?? [];
+              // "Run commands without asking" (re-read too: it can be switched mid-reply).
+              const noAsk = !!latest?.runWithoutAsking && latestSettings.limits[provider].auto && isEditingMode(mode);
               const docAbs = (j: (typeof jobs)[number]) => path.join(j.roots[0].abs, previews.get(j.i)!.path);
               const needsAsk = ready.filter((j) =>
                 j.command
-                  ? approvalNeeded(j.command.run, terminal!, commandMode, rules)
+                  ? approvalNeeded(j.command.run, terminal!, commandMode, rules, noAsk)
                   : !(autoCode || (j.doc && latestSettings.docsAutoSave.includes(docAbs(j)))),
               );
+              for (const j of ready) {
+                if (j.command && !needsAsk.includes(j) && approvalNeeded(j.command.run, terminal!, commandMode, rules)) j.command.run.unasked = true;
+              }
               for (const j of ready) if (!needsAsk.includes(j)) decisions.set(j.i, "approve");
               if (needsAsk.length) {
                 for (const j of needsAsk) {

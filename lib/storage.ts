@@ -126,7 +126,7 @@ export async function updateChat(id: string, fn: (chat: Chat) => void | Promise<
 }
 
 export async function createChat(
-  init: Partial<Pick<Chat, "model" | "thinking" | "effort" | "folders" | "hiddenProjectFolders" | "webSearch" | "github" | "code" | "mode" | "projectId">>,
+  init: Partial<Pick<Chat, "model" | "thinking" | "effort" | "folders" | "hiddenProjectFolders" | "webSearch" | "github" | "code" | "mode" | "runWithoutAsking" | "projectId">>,
 ): Promise<Chat> {
   const settings = await getSettings();
   const now = new Date().toISOString();
@@ -146,6 +146,7 @@ export async function createChat(
     github: init.github ?? false,
     code: init.code ?? false,
     mode: init.mode ?? "ask",
+    ...(init.runWithoutAsking ? { runWithoutAsking: true } : {}),
     autoApprove: false,
     projectId: init.projectId ?? null,
     messages: [],
