@@ -91,7 +91,9 @@ if (-not (Test-Up)) {
   }
   if (-not (Test-Path (Join-Path $AppDir "node_modules"))) {
     Write-Host "Installing the app's packages (first run)..."
-    & npm.cmd install *> (Join-Path $DataDir "install.log")
+    # Through cmd.exe: npm writes warnings to stderr, and Windows PowerShell would treat those as errors.
+    $installLog = Join-Path $DataDir "install.log"
+    & cmd.exe /c "npm install > `"$installLog`" 2>&1"
     if ($LASTEXITCODE -ne 0) { Stop-WithError "Installing packages failed. See $DataDir\install.log" }
   }
   # Build on first run, or when the code changed since the last build.
@@ -104,8 +106,9 @@ if (-not (Test-Up)) {
     $needsBuild = [bool]$newer
   }
   if ($needsBuild) {
-    Write-Host "Building the app (first run or code changed). This takes about a minute..."
-    & npm.cmd run build *> $BuildLog
+    Write-Host "Building the app (first run or code changed). This takes a few minutes; don't close this window..."
+    # Through cmd.exe, like the install above: build warnings go to stderr and aren't failures.
+    & cmd.exe /c "npm run build > `"$BuildLog`" 2>&1"
     if ($LASTEXITCODE -ne 0) { Stop-WithError "Build failed. See $BuildLog" }
   }
   # Start the server in the background, with no window, logging to data\server.log.
