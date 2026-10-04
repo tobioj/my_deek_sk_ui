@@ -327,6 +327,12 @@ export class ClaudeSession implements ModelSession {
     if (calls.length) this.messages.push({ role: "user", content: calls.map((c) => this.toolResult(c)) });
   }
 
+  private answerNow = false;
+  forceAnswer(note: string) {
+    this.messages.push({ role: "system", content: note } as unknown as Msg);
+    this.answerNow = true;
+  }
+
   // Notes become system messages where the model takes them; otherwise text after your message.
   private materialize(): Msg[] {
     const id = this.chat.model;
@@ -395,6 +401,7 @@ export class ClaudeSession implements ModelSession {
       system: [{ type: "text", text: this.system, cache_control: { type: "ephemeral" } }],
       messages: this.materialize(),
       ...(tools.length ? { tools } : {}),
+      ...(tools.length && this.answerNow ? { tool_choice: { type: "none" } } : {}),
       ...(off("autocache") ? {} : { cache_control: { type: "ephemeral" } }),
       ...(thinking ? { thinking } : {}),
       ...(effort ? { output_config: { effort } } : {}),

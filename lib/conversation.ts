@@ -7,6 +7,7 @@ import { folderTree } from "./files";
 import { DOC_TOOL_NAMES } from "./docs";
 import { EDIT_TOOL_NAMES } from "./edits";
 import { GITHUB_TOOL_NAMES } from "./github";
+import { HELPER_TOOL_NAMES, MAX_ROUNDS_PER_REPLY } from "./helper-tools";
 import type { Root } from "./roots";
 import { fileBlock, truncateText } from "./skip";
 import { SKILL_TOOL_NAMES, skillsPrompt } from "./skills";
@@ -43,6 +44,8 @@ export interface ToolAccess {
   code?: boolean; // Claude: code execution in Anthropic's sandbox
   skills?: SkillInfo[]; // skills it can open with use_skill
   runFreely?: boolean; // "Run commands without asking" is on in this chat (Edit/Auto)
+  helpers?: { max: number }; // it may send helpers to research (the chat's Helpers switch)
+  helperRole?: { steps: number; minutes: number; docs: string | null }; // it IS a helper, working on one task for the brain
 }
 
 // Claude's own web tools have different names from the app's (Tavily) ones.
@@ -125,6 +128,8 @@ function toolsPrompt(access: ToolAccess): string {
     access.github.length ? `- Read GitHub: ${names(GITHUB_TOOL_NAMES)}` : "",
     access.code ? "- Run code in a sandbox on Anthropic's servers: code_execution" : "",
     access.skills?.length ? `- Open your skills: ${names(SKILL_TOOL_NAMES)}` : "",
+    access.helpers ? `- Send helpers to research for you: ${names(HELPER_TOOL_NAMES)}` : "",
+    access.helperRole?.docs ? "- Read the user's Docs folder: list_documents, read_document" : "",
   ].filter(Boolean);
   if (!lines.length) return "";
   let text =
@@ -236,7 +241,44 @@ export async function systemPrompt(chat: Chat, settings: Settings, access: ToolA
       `the user attached to this chat are copied into it. Use it for calculations, data analysis and charts. Files you create ` +
       `there are offered to the user as downloads in the chat.`;
   }
-  return prompt + skillsPrompt(access.skills ?? []) + toolsPrompt(access);
+  if (access.helpers) prompt += helpersPrompt(access.helpers.max);
+  prompt += skillsPrompt(access.skills ?? []) + toolsPrompt(access);
+  if (access.helperRole) prompt += helperRolePrompt(access.helperRole);
+  return prompt;
+}
+
+// The brain: when and how to use helpers.
+function helpersPrompt(max: number): string {
+  return (
+    `\n\n## Helpers\n` +
+    `You can send helpers to research for you with start_helpers, up to ${max} at a time. A helper is a separate run of you with an ` +
+    `empty context: it sees only the task you write, can read what this chat can (whichever of the project folders, the web, GitHub, ` +
+    `skills and the Docs folder are on here), and can't change anything or talk to the user. It reports back to you, and you act on its report.\n` +
+    `- Use helpers when the work splits into independent parts: researching several questions or sources at once, exploring different ` +
+    `areas of a large codebase, comparing options, or checking a plan from different angles. Don't use them for quick questions you can ` +
+    `answer yourself or with a couple of tool calls.\n` +
+    `- Write each task so it stands on its own: the context, file paths or links, what to look for, and what the report should contain. ` +
+    `Give each a short title.\n` +
+    `- Then call wait_for_helpers and judge the reports: they can be wrong or incomplete, so check key claims yourself when that's cheap, ` +
+    `and send another, narrower round if something needs digging into (at most ${MAX_ROUNDS_PER_REPLY} rounds per reply).\n` +
+    `- You do all the acting: file changes, commands and documents stay with you, under the user's usual approvals.\n` +
+    `- If the user moves on before your helpers finish, their reports come to you automatically when they're done, in a message from the app.`
+  );
+}
+
+// A helper: one task for the brain, read-only, ending in a report.
+function helperRolePrompt(r: { steps: number; minutes: number; docs: string | null }): string {
+  return (
+    `\n\n## You are a helper\n` +
+    `Another AI (the "brain"), which is helping the user, gave you the task in the next message. Work on it by yourself with your ` +
+    `read-only tools, then write your report: your final message is all the brain gets. You can't change anything, run commands or talk ` +
+    `to the user, and nobody will answer questions, so if something is unclear, make a reasonable assumption and say so.` +
+    (r.docs ? ` You can read the user's Docs folder (\`${r.docs}\`) with list_documents and read_document.` : "") +
+    `\n\nYour report: lead with the answer or findings; back them with evidence (file paths and line numbers, links, short quotes); ` +
+    `say what you couldn't find or verify; and recommend what the brain should do next. Be concise and factual, and never invent anything.\n\n` +
+    `You have up to ${r.steps} tool uses and ${r.minutes} minutes. After that you'll be asked to write your report with what you have. ` +
+    `Use several tools at once when that's faster.`
+  );
 }
 
 const fileData = (dataUrl: string | undefined) => {
@@ -338,7 +380,8 @@ export function appendUser(messages: Msg[], content: Msg["content"]) {
 
 export async function buildMessages(chat: Chat, settings: Settings, access: ToolAccess, project: Project | null = null): Promise<Msg[]> {
   const hasFolders = access.roots.length > 0;
-  const useTools = hasFolders || access.web || !!access.docs || access.github.length > 0 || !!access.terminal || !!access.skills?.length;
+  const useTools =
+    hasFolders || access.web || !!access.docs || access.github.length > 0 || !!access.terminal || !!access.skills?.length || !!access.helpers || !!access.helperRole?.docs;
   const sendReasoning = useTools && chat.thinking; // DeepSeek requires past reasoning when tools are in play
   // Calls Claude's servers ran (web search, code) are never sent back as tool calls here.
   const available = (name: string, server?: boolean) =>
@@ -348,7 +391,8 @@ export async function buildMessages(chat: Chat, settings: Settings, access: Tool
     (!!access.docs && DOC_TOOL_NAMES.has(name)) ||
     (access.github.length > 0 && GITHUB_TOOL_NAMES.has(name)) ||
     (!!access.terminal && COMMAND_TOOL_NAMES.has(name)) ||
-    (!!access.skills?.length && SKILL_TOOL_NAMES.has(name)));
+    (!!access.skills?.length && SKILL_TOOL_NAMES.has(name)) ||
+    (!!access.helpers && HELPER_TOOL_NAMES.has(name)));
   const out: Msg[] = [{ role: "system", content: await systemPrompt(chat, settings, access, project) }];
 
   // A long chat that was summarized: the summary stands in for the messages it covers.

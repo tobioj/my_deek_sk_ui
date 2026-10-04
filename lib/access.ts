@@ -7,6 +7,7 @@ import { DOC_TOOLS, docsFolderPath } from "./docs";
 import { EDIT_TOOLS } from "./edits";
 import { chatLinkedFolders } from "./folders";
 import { GITHUB_TOOLS, reposFor } from "./github";
+import { HELPER_TOOLS } from "./helper-tools";
 import { providerOf, type Provider, type ProviderLimits } from "./models";
 import { resolveRoots, type Root } from "./roots";
 import { getSecret } from "./secrets";
@@ -31,6 +32,7 @@ export interface ChatAccess {
   terminal: TerminalAccess | null;
   code: boolean; // Claude's code sandbox
   skills: SkillInfo[]; // skills it can open (for every provider)
+  helpers: boolean; // it may send helpers to research (the chat's Helpers switch)
   tools: OpenAI.Chat.Completions.ChatCompletionTool[]; // the app's own tools (Claude's server tools are added by its session)
   access: ToolAccess;
 }
@@ -72,9 +74,23 @@ export async function resolveAccess(chat: Chat, settings: Settings, req: Request
     ...(github ? GITHUB_TOOLS : []),
     ...(terminal ? COMMAND_TOOLS : []),
     ...(skills.length ? SKILL_TOOLS : []),
+    ...(chat.helpersOn ? HELPER_TOOLS : []),
   ];
+  const helpers = !!chat.helpersOn;
   // "Run commands without asking": the chat's switch, in Edit and Auto mode, where Auto is allowed.
   const runFreely = !!terminal && editing && limits.auto && !!chat.runWithoutAsking;
-  const access: ToolAccess = { provider, roots, web, mode, docs: docsPath, github: github ? repos : [], terminal, code, skills, runFreely };
-  return { provider, limits, project, roots, mode, editing, web, docsPath, repos, github, terminal, code, skills, tools, access };
+  const access: ToolAccess = {
+    provider,
+    roots,
+    web,
+    mode,
+    docs: docsPath,
+    github: github ? repos : [],
+    terminal,
+    code,
+    skills,
+    runFreely,
+    ...(helpers ? { helpers: { max: settings.helpersMax } } : {}),
+  };
+  return { provider, limits, project, roots, mode, editing, web, docsPath, repos, github, terminal, code, skills, helpers, tools, access };
 }

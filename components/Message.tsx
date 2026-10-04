@@ -33,6 +33,7 @@ import {
   SquareCode,
   Terminal,
   Trash2,
+  UsersRound,
   X,
 } from "lucide-react";
 import { memo, useContext, useEffect, useRef, useState } from "react";
@@ -40,6 +41,7 @@ import { api, formatBytes } from "@/lib/client";
 import { formatCost, formatTokens } from "@/lib/tokens";
 import { aiName, labelFromId } from "@/lib/models";
 import type { AssistantMessage, AssistantStep, Attachment, ChatSummaryNote, CommandRun, ProcessInfo, ToolCall, UserMessage } from "@/lib/types";
+import { AgentsPanelContext } from "./AgentsPanel";
 import { DiffView } from "./DiffView";
 import { CopyButton, Markdown } from "./Markdown";
 import { ProcsContext } from "./RunningList";
@@ -128,6 +130,7 @@ export const UserBubble = memo(function UserBubble({
     }
   }, [editing]);
 
+  if (message.auto === "helpers") return <HelperReportsLine text={message.text} />;
   return (
     <div className="group flex flex-col items-end gap-1.5">
       {message.attachments.length > 0 && (
@@ -202,6 +205,39 @@ export const UserBubble = memo(function UserBubble({
     </div>
   );
 });
+
+// Helper reports the app handed to the AI (instead of a message from you).
+function HelperReportsLine({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const openHelpers = useContext(AgentsPanelContext);
+  const body = text.replace(/^\[From the app[^\]]*\]\s*/, "");
+  const n = (body.match(/^### /gm) ?? []).length;
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-[12px] text-muted hover:bg-hover hover:text-fg"
+        >
+          <UsersRound size={13} /> {n === 1 ? "A helper report arrived" : `${n} helper reports arrived`}
+          <ChevronRight size={13} className={clsx("transition-transform", open && "rotate-90")} />
+        </button>
+        {openHelpers && (
+          <button type="button" onClick={openHelpers} className="text-[12px] text-accent hover:underline">
+            Helpers panel
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="max-h-[60vh] w-full overflow-y-auto rounded-xl border border-line bg-surface px-4 py-3 text-[13.5px]">
+          <Markdown text={body} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 // A message you sent while the AI was still replying. It goes in at the reply's next step;
 // "Answer together now" cuts off what it's writing so it starts again with this in mind.
@@ -317,6 +353,10 @@ const TOOL_ICONS: Record<string, typeof FileText> = {
   use_skill: Sparkles,
   read_skill_file: Sparkles,
   stop_command: Square,
+  start_helpers: UsersRound,
+  wait_for_helpers: UsersRound,
+  check_helpers: UsersRound,
+  stop_helpers: Square,
 };
 
 function hostOf(url: string): string {
@@ -372,6 +412,16 @@ function pendingLabel(call: ToolCall): string {
       return `Reading ${args.path ?? "a file"} from the ${args.name ?? ""} skill…`;
     case "stop_command":
       return `Stopping ${args.id ?? "command"}…`;
+    case "start_helpers": {
+      const n = Array.isArray(args.helpers) ? args.helpers.length : 0;
+      return `Sending ${n || ""} helper${n === 1 ? "" : "s"}…`.replace("  ", " ");
+    }
+    case "wait_for_helpers":
+      return "Waiting for helpers…";
+    case "check_helpers":
+      return "Checking on helpers…";
+    case "stop_helpers":
+      return "Stopping helpers…";
     default:
       return `${call.name}…`;
   }
@@ -379,10 +429,16 @@ function pendingLabel(call: ToolCall): string {
 
 function ToolCard({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false);
+  const openHelpers = useContext(AgentsPanelContext);
   const Icon = TOOL_ICONS[call.name] ?? FileText;
   const done = call.summary !== undefined;
   return (
     <div className="my-1">
+      {call.name === "start_helpers" && openHelpers && (
+        <button type="button" onClick={openHelpers} className="float-right ml-2 mt-1 text-[12px] text-accent hover:underline">
+          Watch them →
+        </button>
+      )}
       <button
         type="button"
         onClick={() => done && setOpen((o) => !o)}

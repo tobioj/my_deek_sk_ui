@@ -38,6 +38,9 @@ export const DEFAULT_SETTINGS: Settings = {
   skillsFolder: "",
   skillsOff: [],
   summarizeAt: 200_000,
+  helpersMax: 4,
+  helperSteps: 30,
+  helperMinutes: 15,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   maxFileChars: 100_000,
   webSearch: false,
@@ -126,7 +129,7 @@ export async function updateChat(id: string, fn: (chat: Chat) => void | Promise<
 }
 
 export async function createChat(
-  init: Partial<Pick<Chat, "model" | "thinking" | "effort" | "folders" | "hiddenProjectFolders" | "webSearch" | "github" | "code" | "mode" | "runWithoutAsking" | "projectId">>,
+  init: Partial<Pick<Chat, "model" | "thinking" | "effort" | "folders" | "hiddenProjectFolders" | "webSearch" | "github" | "code" | "mode" | "runWithoutAsking" | "helpersOn" | "projectId">>,
 ): Promise<Chat> {
   const settings = await getSettings();
   const now = new Date().toISOString();
@@ -147,6 +150,7 @@ export async function createChat(
     code: init.code ?? false,
     mode: init.mode ?? "ask",
     ...(init.runWithoutAsking ? { runWithoutAsking: true } : {}),
+    ...(init.helpersOn ? { helpersOn: true } : {}),
     autoApprove: false,
     projectId: init.projectId ?? null,
     messages: [],
@@ -231,6 +235,10 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   if (typeof patch.claudeFallback === "boolean") next.claudeFallback = patch.claudeFallback;
   if (typeof patch.skillsFolder === "string") next.skillsFolder = patch.skillsFolder.trim();
   if (Array.isArray(patch.skillsOff)) next.skillsOff = skillNames(patch.skillsOff);
+  const whole = (v: unknown, lo: number, hi: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : null);
+  next.helpersMax = whole(patch.helpersMax, 1, 8) ?? next.helpersMax;
+  next.helperSteps = whole(patch.helperSteps, 5, 100) ?? next.helperSteps;
+  next.helperMinutes = whole(patch.helperMinutes, 1, 60) ?? next.helperMinutes;
   if (typeof patch.summarizeAt === "number") next.summarizeAt = patch.summarizeAt <= 0 ? 0 : Math.max(50_000, Math.min(900_000, Math.round(patch.summarizeAt)));
   if (typeof patch.systemPrompt === "string") next.systemPrompt = patch.systemPrompt;
   if (typeof patch.maxFileChars === "number" && patch.maxFileChars >= 1000) next.maxFileChars = Math.min(patch.maxFileChars, 2_000_000);

@@ -155,6 +155,7 @@ The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same 
 | **Models** | DeepSeek **V4.1 Flash** (fast, cheap, sees images) or **V4 Pro** (smartest, text only), and every Claude model your key can use, from Haiku to Fable (the list comes from your key). Pick per chat in the model menu; **Settings → Defaults for new chats** sets which one new chats start with. |
 | **Long chats** | Past 200K tokens (change it in **Settings → Long chats**; sooner for models with a smaller context), the earlier messages are summarized so the chat can keep going. **Summarize** in the token ring does it any time. Works for DeepSeek and Claude. |
 | **Skills** | Instructions you keep for kinds of tasks (how you like reports written, a checklist, a template). Every AI opens the matching skill when a task needs it. See **Skills** below. |
+| **Helpers** | Switch on **Helpers** by the message box, and the AI can send helpers to research parts of a big task at the same time. They only read; the AI judges their reports and does the acting. See **Helpers** below. |
 | **Token meter** | The ring next to the model picker shows how full the conversation is, what it's cost so far, and what the next message will cost. |
 | **Stop, edit, retry** | Stop a reply with the ■ button or **Esc**. Hover your message to edit and resend it. **Retry** regenerates the last reply. |
 | **Send while it's replying** | Messages you send while DeepSeek is working go in at its next step, so it takes them into account in the same reply. **Answer together now** cuts off what it's writing and starts again with your message. Stop puts waiting messages back in the message box. |
@@ -209,9 +210,22 @@ In Project settings you can also switch off **Also use my skills** (off by defau
 | Toggle sidebar | ⌘ B |
 | Stop reply | Esc |
 
+### Helpers
+
+For big tasks that split into parts (research across several sources, exploring different areas of a codebase, comparing options), the AI in a chat can send **helpers** and act as the "brain":
+
+- **Switch it on per chat** with the **Helpers** button by the message box. It's off in new chats. When it's on, the AI decides by itself when a task is worth splitting up.
+- **A helper** is a separate run of the same model as the chat (DeepSeek chats get DeepSeek helpers, Claude chats get Claude helpers, with the same thinking and effort). It starts with an empty context: it sees only the task the AI wrote, never your conversation.
+- **Helpers only read and research**: the project's folders, the web (if Search is on), GitHub (if it's on), skills and the Docs folder. They never change files, run commands or save documents. The AI does all of that, under your usual approvals.
+- **Watch them** in the helpers panel: the **● 2 helpers working** button at the top right (it opens by itself on wide windows). Each helper shows what it's doing, its time, steps and cost, and opens to its task, steps and report.
+- **Stopping is separate.** The Stop button in the chat stops the AI's reply, not its helpers. Stop helpers in the panel (one, or **Stop all**); the AI can stop them too. Quitting the app stops them.
+- **Reports go back by themselves.** When every helper in a round has finished, their reports go to the AI: into its reply if it's still working, otherwise in an automatic reply (a small *Helper reports arrived* line, then its review). If the app window is closed, that happens when you next open the chat. After 3 automatic replies in a row it waits for you, with a **Send to …** button; anything you send resets that.
+- **Limits** in **Settings → Helpers**: helpers at once (4), steps per helper (30) and minutes per helper (15). At a limit, a helper stops and writes its report from what it found. The AI can send at most 3 rounds of helpers per reply.
+- **Costs**: each helper costs about as much as a reply. Its cost shows in the panel and is added to the chat's total.
+
 ## Where things are stored
 
-Everything is in `data/` (ignored by Git): one JSON file per chat in `data/chats/`, projects in `data/projects/`, images, PDFs and files Claude made in `data/uploads/`, your skills in `data/skills/`, each project's own skills in `data/project-skills/`, settings in `data/settings.json`, and server logs in `data/server.log`. Copy the `data` folder to back everything up or move it to another computer (keys excepted).
+Everything is in `data/` (ignored by Git): one JSON file per chat in `data/chats/` (with its helpers' tasks and reports), projects in `data/projects/`, images, PDFs and files Claude made in `data/uploads/`, your skills in `data/skills/`, each project's own skills in `data/project-skills/`, settings in `data/settings.json`, and server logs in `data/server.log`. Copy the `data` folder to back everything up or move it to another computer (keys excepted).
 
 ## Safety
 
@@ -240,6 +254,8 @@ After changing code, `deepseek-chat restart` rebuilds and restarts the everyday 
 | `lib/claude.ts`, `lib/claude-session.ts` | The Claude client, the model list from your key, Claude's message format, web search, code execution, files |
 | `lib/summarize.ts` | Summarizing long chats (Claude's own, or written by the app) |
 | `lib/skills.ts` | Skills: finding them, importing, the read-only skill tools |
+| `lib/helpers.ts`, `lib/helper-tools.ts` | Helpers: running them in the background (read-only), the AI's tools to send, wait for, check and stop them, handing reports back |
+| `components/AgentsPanel.tsx` | The helpers panel |
 | `lib/tools.ts`, `lib/files.ts` | Read-only folder tools and file access |
 | `lib/folders.ts`, `lib/roots.ts` | Which folders a chat can use (project + chat, minus switched-off) and how `name/path` maps to disk |
 | `lib/websearch.ts` | Web search tools (Tavily) |

@@ -156,6 +156,29 @@ export interface UserMessage {
   files?: string; // attached file text, wrapped in === FILE: path === markers
   pdfText?: string; // text of attached PDFs (models that can't read PDFs themselves get this)
   attachments: Attachment[]; // metadata only (names, sizes, image filenames)
+  auto?: "helpers"; // written by the app, not you: helper reports handed to the brain
+}
+
+// A helper: a separate run of the chat's own model that researches one task for the chat's AI
+// (the "brain") and reports back. Helpers only read; the brain does all the acting.
+export type HelperStatus = "running" | "done" | "limit" | "stopped" | "failed";
+export interface HelperRun {
+  id: string;
+  batch: string; // the start_helpers call that started it (reports go back to the brain per batch)
+  title: string;
+  task: string; // what the brain asked it to do
+  model: ModelId;
+  status: HelperStatus;
+  startedAt: string;
+  endedAt?: string;
+  activity?: string; // what it's doing right now (while running)
+  steps: { summary: string; ok: boolean }[]; // its tool uses, in order
+  report?: string; // what it found (also when it hit a limit or was stopped)
+  error?: string;
+  limit?: "steps" | "time"; // the limit it hit
+  stoppedBy?: "you" | "brain" | "app";
+  cost: number; // USD
+  delivered?: boolean; // its report has been handed to the brain
 }
 
 export interface AssistantMessage {
@@ -199,6 +222,9 @@ export interface Chat {
   runWithoutAsking?: boolean; // commands run without asking in Edit and Auto mode (risky ones still ask)
   projectId?: string | null;
   summary?: ChatSummaryNote; // earlier messages were summarized (long chats)
+  helpersOn?: boolean; // the AI may send helpers to research (off by default)
+  helperRuns?: HelperRun[]; // helpers this chat's AI started
+  helperAutoRounds?: number; // automatic replies to helper reports in a row (stops at 3 until you write)
   extraCost?: number; // USD spent outside replies (summaries)
   messages: ChatMessage[];
 }
@@ -288,6 +314,9 @@ export interface Settings {
   skillsFolder: string; // optional extra skills folder on this computer ("" = none); your own skills live in data/skills
   skillsOff: string[]; // your skills (by name, lowercase) switched off everywhere
   summarizeAt: number; // summarize a chat's earlier messages past this many tokens (0 = never)
+  helpersMax: number; // helpers working at the same time in a chat
+  helperSteps: number; // tool uses per helper before it must report
+  helperMinutes: number; // minutes per helper before it must report
   systemPrompt: string;
   maxFileChars: number;
   webSearch: boolean; // master flag: shows the Search toggle in the composer

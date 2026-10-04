@@ -30,6 +30,7 @@ export async function POST(req: Request) {
     code: body.code === true,
     mode: body.mode === "plan" || body.mode === "edit" || body.mode === "auto" ? body.mode : "ask",
     runWithoutAsking: body.runWithoutAsking === true,
+    helpersOn: body.helpersOn === true,
     projectId: project?.id ?? null,
   });
   return Response.json(chat);

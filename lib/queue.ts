@@ -17,6 +17,9 @@ interface Reply {
 const g = globalThis as unknown as { __replyQueues?: Map<string, Reply> };
 const replies = (g.__replyQueues ??= new Map<string, Reply>());
 
+// Has a message of yours arrived that the reply hasn't taken yet?
+export const hasQueued = (chatId: string) => (replies.get(chatId)?.queue.length ?? 0) > 0;
+
 export function startReply(chatId: string) {
   replies.set(chatId, { queue: [], phase: "model", step: null });
 }

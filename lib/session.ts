@@ -46,6 +46,8 @@ export interface ModelSession {
   // What it said in the step (the steps of one API call). result is null when the step was cut off.
   addAssistant(steps: AssistantStep[], result: StepResult | null): void;
   addToolResults(calls: ToolCall[]): void;
+  // A note from the app, then a step where it can't use tools (a helper writing its report).
+  forceAnswer(note: string): void;
 }
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -70,6 +72,7 @@ export class DeepSeekSession implements ModelSession {
     if (chat.thinking) params.reasoning_effort = chat.effort === "max" ? "max" : "high";
     else params.max_tokens = 32_000;
     if (this.tools.length) params.tools = this.tools;
+    if (this.tools.length && this.answerNow) params.tool_choice = "none";
 
     const pending = new Map<number, { id: string; name: string; args: string }>();
     let finish: string | null = null;
@@ -130,5 +133,11 @@ export class DeepSeekSession implements ModelSession {
 
   addToolResults(calls: ToolCall[]) {
     for (const c of calls) this.messages.push({ role: "tool", tool_call_id: c.id, content: c.result ?? "" });
+  }
+
+  private answerNow = false;
+  forceAnswer(note: string) {
+    this.messages.push({ role: "user", content: note });
+    this.answerNow = true;
   }
 }

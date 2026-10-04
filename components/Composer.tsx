@@ -20,6 +20,7 @@ import {
   Square,
   SquareCode,
   SquareTerminal,
+  UsersRound,
   X,
 } from "lucide-react";
 import { nanoid } from "nanoid";
@@ -58,7 +59,7 @@ export interface ComposerProps {
   thinking: boolean;
   effort: Effort;
   code: boolean; // Claude: code execution in Anthropic's sandbox
-  onPrefs: (p: Partial<{ model: ModelId; thinking: boolean; effort: Effort; webSearch: boolean; github: boolean; code: boolean; mode: Mode; runWithoutAsking: boolean }>) => void;
+  onPrefs: (p: Partial<{ model: ModelId; thinking: boolean; effort: Effort; webSearch: boolean; github: boolean; code: boolean; mode: Mode; runWithoutAsking: boolean; helpersOn: boolean }>) => void;
   mode: Mode; // Ask / Plan / Edit / Auto for the project folder
   runFreely: { on: boolean; allowed: boolean; sandboxed: boolean } | null; // "Run commands without asking" (null = not offered here)
   gitChanged: number; // uncommitted changes in the project folder (0 if none / not a repo)
@@ -68,6 +69,8 @@ export interface ComposerProps {
   githubState: "hidden" | "ready" | "no-repos";
   onGithubSetup: () => void;
   searchShown: boolean; // show the Search toggle (Claude chats, or DeepSeek with web search set up in Settings)
+  helpers: boolean; // this chat's Helpers switch
+  helpersMax: number; // helpers at once (Settings)
   folders: LinkedFolder[]; // project + chat folders (hidden = project folder switched off here)
   onOpenFolder: () => void;
   onRemoveFolder: (path: string) => void; // remove a chat folder
@@ -522,6 +525,22 @@ export function Composer(p: ComposerProps) {
               <GitBranch size={14} /> GitHub
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={() => p.onPrefs({ helpersOn: !p.helpers })}
+            title={
+              p.helpers
+                ? `Helpers are on: ${p.ai} can send up to ${p.helpersMax} helpers at once to research parts of a task (they only read), then acts on their reports. Each helper costs about as much as a reply.`
+                : `Helpers are off. Turn them on to let ${p.ai} send helpers to research parts of a big task in parallel.`
+            }
+            className={clsx(
+              "flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors",
+              p.helpers ? "border-accent/30 bg-accent-soft text-accent" : "border-line text-muted hover:bg-hover hover:text-fg",
+            )}
+          >
+            <UsersRound size={14} /> <span className="max-sm:hidden">Helpers</span>
+          </button>
 
           <div className="flex-1" />
 

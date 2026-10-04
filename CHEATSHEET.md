@@ -125,6 +125,14 @@ You need **at least one** of DeepSeek or Claude. With both, **Settings → Defau
 - **Projects** can have their own skills (kept with the project), and automatically use any `.claude/skills` folder inside their folders (those travel with your code). Switch **Also use my skills** or single skills off per project.
 - Same name in two places: the project's own wins, then the one in its code, then yours.
 
+**Helpers** (the **Helpers** button by the message box; limits in Settings → Helpers)
+- For big tasks that split into parts: the AI sends **helpers** (separate runs of the same model, with an empty context) to research parts at the same time, then judges their reports and acts on them. DeepSeek chats get DeepSeek helpers; Claude chats get Claude helpers.
+- Helpers **only read** (folders, the web if Search is on, GitHub if on, skills, the Docs folder). They never change files or run commands; the AI does that, with your usual approvals.
+- **● 2 helpers working** (top right) opens the helpers panel: what each is doing, its time, steps and cost, its task and report, and **Stop** / **Stop all**.
+- The chat's **■ / Esc** stops the AI's reply only; helpers keep going until they finish or you stop them in the panel. Quitting the app stops them.
+- When a round of helpers finishes, the AI gets their reports by itself (*Helper reports arrived*) and carries on. After 3 automatic replies in a row it waits for you: click **Send to …**.
+- Limits: helpers at once (4), steps per helper (30), minutes per helper (15). Each helper costs about as much as a reply.
+
 **Messages:** hover your message → **Edit** to change and resend it. **Retry** under a reply gets a new answer. **Save** under a reply saves it to a file you choose (new file, or add to the end of an existing one).
 
 **Docs folder** (Settings → Docs folder; projects can set their own)
@@ -241,6 +249,8 @@ This is **not** the app. It's Claude Code (a text-only coding assistant that run
 | "Your Claude credit balance is too low" | Add credit at console.anthropic.com → Billing |
 | A button is greyed out (Search, Code, GitHub, a mode) | **Settings → AI providers → What … may do** → switch it on → Save |
 | A skill isn't used | Check its switch in Settings → Skills (or Project settings), and that its description says when to use it. A ⚠ marks skills to fix. |
+| The AI doesn't send helpers | Turn on **Helpers** by the message box. It only uses them for tasks that split into parts; you can also ask it to ("use helpers to…"). |
+| "Waiting for you" note about helper reports | The AI already replied to helpers 3 times in a row. Click **Send to …** to let it review the new reports. |
 | Search button missing | Settings → Web search → turn it on → Save |
 | Search button does nothing | Settings → Web search → add your Tavily key |
 | DeepSeek made a change you don't want | Click **Undo changes** under that reply |

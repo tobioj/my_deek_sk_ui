@@ -1,5 +1,5 @@
 "use client";
-import { CheckCircle2, Globe, KeyRound, Keyboard, Loader2, MessageSquareText, Palette, Paperclip, ScrollText, SlidersHorizontal, XCircle } from "lucide-react";
+import { CheckCircle2, Globe, KeyRound, Keyboard, Loader2, MessageSquareText, Palette, Paperclip, ScrollText, SlidersHorizontal, UsersRound, XCircle } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/client";
 import { EFFORT_SHORT, EFFORTS, type ModelInfo } from "@/lib/models";
@@ -288,6 +288,44 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
           <Fold label="How summarizing works">
             Past this size, the earlier messages are summarized and the AI continues from the summary: faster and cheaper, for DeepSeek and Claude.
             You still see every message, and the chat shows where the summary starts. You can also summarize any chat from its token meter.
+          </Fold>
+        </FoldSection>
+
+        <FoldSection
+          id="settings-helpers"
+          title="Helpers"
+          icon={<UsersRound size={15} />}
+          summary={`${draft.helpersMax} at once · ${draft.helperSteps} steps · ${draft.helperMinutes} min each`}
+        >
+          {(
+            [
+              ["helpersMax", "Helpers at once", "The most helpers working at the same time in a chat", 1, 8],
+              ["helperSteps", "Steps per helper", "Tool uses (reading a file, a search…) before it must report", 5, 100],
+              ["helperMinutes", "Minutes per helper", "Time before it must report", 1, 60],
+            ] as const
+          ).map(([key, label, hint, min, max]) => (
+            <div key={key} className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-[13.5px]">{label}</div>
+                <div className="text-xs text-muted">{hint}</div>
+              </div>
+              <input
+                type="number"
+                min={min}
+                max={max}
+                value={draft[key]}
+                onChange={(e) => setDraft({ ...draft, [key]: Math.max(min, Math.min(max, Math.round(Number(e.target.value)) || min)) })}
+                aria-label={label}
+                className="h-8 w-20 rounded-lg border border-line bg-surface px-2 text-right text-[13px] tabular-nums outline-none"
+              />
+            </div>
+          ))}
+          <Fold label="How helpers work">
+            Switch on <b>Helpers</b> by the message box in a chat. The AI can then send helpers (separate runs of the same model) to research parts
+            of a task at once: they read the project folders, the web, GitHub, skills and the Docs folder (whatever that chat can), report back, and
+            the AI acts on their reports. Helpers never change anything. They keep working if you stop the AI&apos;s reply; you stop them from the
+            helpers panel (top right). When a round finishes, the AI picks up the reports by itself, up to 3 times in a row before it waits for you.
+            Each helper costs about as much as a reply, so this setting is also your cost limit.
           </Fold>
         </FoldSection>
 

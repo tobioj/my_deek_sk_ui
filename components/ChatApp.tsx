@@ -1,7 +1,7 @@
 "use client";
 // The whole app: sidebar, conversation, composer, dialogs, drag-and-drop.
 import clsx from "clsx";
-import { ArrowDown, FolderOpen, KeyRound, Layers, PanelLeftOpen, Paperclip, Settings as SettingsIcon, SlidersHorizontal, SquarePen, Upload } from "lucide-react";
+import { ArrowDown, FolderOpen, KeyRound, Layers, PanelLeftOpen, Paperclip, Settings as SettingsIcon, SlidersHorizontal, SquarePen, Upload, UsersRound } from "lucide-react";
 import { nanoid } from "nanoid";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, fileToAttachment, readEvents, walkDroppedFolder, type DraftAttachment, type LocalFile } from "@/lib/client";
@@ -36,6 +36,7 @@ import type {
 import { isEditingMode } from "@/lib/types";
 import { baseName, folderKey, linkedFolders, ownFolders, projectFolders } from "@/lib/folders";
 import { platformOf, type Platform } from "@/lib/commands";
+import { AgentsPanel, AgentsPanelContext, type HelperState } from "./AgentsPanel";
 import { Composer } from "./Composer";
 import { FolderDialog, rememberFolder, type DroppedFolder } from "./FolderDialog";
 import { RunContext, type RunTarget } from "./Markdown";
@@ -58,6 +59,7 @@ type Prefs = {
   mode: Mode;
   autoApprove: boolean;
   runWithoutAsking: boolean; // "Run commands without asking" (Edit and Auto mode)
+  helpersOn: boolean; // the AI may send helpers to research
   projectId: string | null;
 };
 type SettingsData = {
@@ -142,6 +144,7 @@ export function ChatApp() {
     mode: "ask",
     autoApprove: false,
     runWithoutAsking: false,
+    helpersOn: false,
     projectId: null,
   });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -196,6 +199,53 @@ export function ChatApp() {
   useEffect(() => {
     chatRef.current = chat;
   }, [chat]);
+
+  // ---------- Helpers ----------
+  // The open chat's helpers (for the panel), checked every couple of seconds while any are working
+  // or have reports waiting. When a round's reports are ready and that chat's AI isn't replying,
+  // an automatic reply hands them over (after 3 in a row it waits for you: see `paused`).
+  const [helperState, setHelperState] = useState<(HelperState & { chatId: string }) | null>(null);
+  const [helpersOpen, setHelpersOpen] = useState(false);
+  const [helperKick, setHelperKick] = useState(0); // check again now (a reply just started helpers, you stopped some)
+  const helperStarting = useRef(new Set<string>()); // chats an automatic reply is being started for
+  const streamRef = useRef<((chatId: string, body: Record<string, unknown>) => Promise<void>) | null>(null);
+  const openChatId = chat?.id ?? null;
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const autoReply = (chatId: string) => {
+      if (abortRefs.current.has(chatId) || helperStarting.current.has(chatId) || abortRefs.current.size >= MAX_REPLIES) return;
+      helperStarting.current.add(chatId);
+      streamRef.current?.(chatId, { action: "helpers" }).finally(() => helperStarting.current.delete(chatId));
+    };
+    const tick = async () => {
+      let soon = false;
+      try {
+        const all = await api<{ chats: { chatId: string; running: number; waiting: number; ready: boolean }[] }>("/api/helpers");
+        for (const c of all.chats) if (c.ready) autoReply(c.chatId);
+        soon = all.chats.length > 0;
+        if (openChatId) {
+          const s = await api<HelperState & { chatId: string }>(`/api/helpers?chatId=${encodeURIComponent(openChatId)}`);
+          if (!stopped) setHelperState(s);
+          if (s.ready) autoReply(openChatId);
+          soon ||= s.running > 0 || s.waiting > 0;
+        }
+      } catch {}
+      if (!stopped) timer = setTimeout(tick, soon && !document.hidden ? 2000 : 10_000);
+    };
+    tick();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [openChatId, helperKick]);
+  const helpersHere = helperState && helperState.chatId === openChatId ? helperState : null;
+  const openHelpersPanel = () => setHelpersOpen(true);
+  const stopHelpers = async (ids: "all" | string[]) => {
+    if (!openChatId) return;
+    await api("/api/helpers", { method: "POST", json: { chatId: openChatId, stop: ids } }).catch((e) => showToast((e as Error).message));
+    setHelperKick((n) => n + 1);
+  };
   useEffect(() => {
     chatsRef.current = chats;
   }, [chats]);
@@ -376,6 +426,7 @@ export function ChatApp() {
         mode: "ask",
         autoApprove: false,
         runWithoutAsking: false, // off in every new chat
+        helpersOn: false,
         projectId: projectId,
       }));
       if (projectId) {
@@ -422,6 +473,7 @@ export function ChatApp() {
         mode: chat.mode === "edit" && chat.autoApprove ? "auto" : (chat.mode ?? "ask"),
         autoApprove: !!chat.autoApprove,
         runWithoutAsking: !!chat.runWithoutAsking,
+        helpersOn: !!chat.helpersOn,
         projectId: chat.projectId ?? null,
       }
     : draftPrefs;
@@ -525,6 +577,7 @@ export function ChatApp() {
               mode: saved.mode,
               autoApprove: saved.autoApprove,
               runWithoutAsking: saved.runWithoutAsking,
+              helpersOn: saved.helpersOn,
               projectId: saved.projectId,
             }
           : c,
@@ -630,6 +683,17 @@ export function ChatApp() {
         body: JSON.stringify({ chatId, ...body }),
         signal: ac.signal,
       });
+      if (!res.ok && body.action === "helpers") {
+        // An automatic reply to helper reports that's no longer needed (already handed over, or
+        // the AI started replying): nothing to show.
+        setLives((m) => {
+          const next = { ...m };
+          delete next[chatId];
+          return next;
+        });
+        if (abortRefs.current.get(chatId) === ac) abortRefs.current.delete(chatId);
+        return;
+      }
       if (!res.ok || !res.body) {
         const d = await res.json().catch(() => ({}));
         throw new Error((d as { error?: string }).error || `Request failed (${res.status})`);
@@ -637,8 +701,15 @@ export function ChatApp() {
       for await (const ev of readEvents(res.body)) {
         switch (ev.type) {
           case "user":
+            // Your message as saved; or helper reports the app handed over (nothing to replace).
             setChat((c) =>
-              c && c.id === chatId ? { ...c, messages: c.messages.map((m) => (m.id === optimisticId ? ev.message : m)) } : c,
+              c && c.id === chatId
+                ? optimisticId
+                  ? { ...c, messages: c.messages.map((m) => (m.id === optimisticId ? ev.message : m)) }
+                  : c.messages.some((m) => m.id === ev.message.id)
+                    ? c
+                    : { ...c, messages: [...c.messages, ev.message] }
+                : c,
             );
             break;
           case "start":
@@ -717,6 +788,11 @@ export function ChatApp() {
           case "tool_result":
             for (const s of a.steps) {
               const call = s.toolCalls?.find((c) => c.id === ev.id);
+              if (call && /_helpers$/.test(call.name)) {
+                setHelperKick((n) => n + 1);
+                // Helpers just started in the chat you're looking at: show them working (wide windows).
+                if (call.name === "start_helpers" && ev.ok && chatRef.current?.id === chatId && window.innerWidth >= 1024) setHelpersOpen(true);
+              }
               if (call)
                 Object.assign(call, {
                   summary: ev.summary,
@@ -838,6 +914,10 @@ export function ChatApp() {
     setAttachments([]);
     await stream(target.id, { action: "send", ...body }, optimistic.id);
   };
+
+  useEffect(() => {
+    streamRef.current = stream;
+  });
 
   // While this chat is replying: the message waits for the reply's next step.
   const queueMessage = async () => {
@@ -1253,6 +1333,8 @@ export function ChatApp() {
       gitChanged={isEditingMode(mode) ? gitChanged : 0}
       clash={clash}
       searchShown={info.provider === "claude" || !!settings?.webSearch}
+      helpers={prefs.helpersOn}
+      helpersMax={settings?.helpersMax ?? 4}
       folders={linked}
       onOpenFolder={() => {
         setDropped(null);
@@ -1347,6 +1429,21 @@ export function ChatApp() {
             )}
             <span className="truncate font-medium text-fg/90">{chat && !isEmpty ? chat.title : ""}</span>
           </div>
+          {helpersHere && helpersHere.runs.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setHelpersOpen((o) => !o)}
+              aria-expanded={helpersOpen}
+              title={helpersHere.running ? "See the helpers working" : "See this chat's helpers and their reports"}
+              className={clsx(
+                "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] font-medium hover:bg-hover",
+                helpersHere.running ? "text-accent" : "text-muted hover:text-fg",
+              )}
+            >
+              {helpersHere.running ? <span className="h-2 w-2 animate-pulse rounded-full bg-accent" /> : <UsersRound size={14} />}
+              {helpersHere.running ? `${helpersHere.running} helper${helpersHere.running === 1 ? "" : "s"} working` : "Helpers"}
+            </button>
+          )}
           <RunningButton procs={procs ?? []} onChange={refreshProcs} />
           {activeFolders.length > 0 && !isEmpty && (
             <div className="flex items-center gap-1.5 text-[12.5px] text-muted" title={activeFolders.map((f) => f.path).join("\n")}>
@@ -1425,6 +1522,7 @@ export function ChatApp() {
           <>
             <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
               <RunContext.Provider value={runTarget}>
+              <AgentsPanelContext.Provider value={openHelpersPanel}>
               <ProcsContext.Provider value={procsNow}>
               <div className="mx-auto max-w-3xl space-y-7 px-4 pb-10 pt-4 md:px-6">
                 {messages.map((m, i) => (
@@ -1471,6 +1569,7 @@ export function ChatApp() {
                   ))}
               </div>
               </ProcsContext.Provider>
+              </AgentsPanelContext.Provider>
               </RunContext.Provider>
             </div>
             <div className="relative mx-auto w-full max-w-3xl px-2 pb-3 md:px-4">
@@ -1487,12 +1586,25 @@ export function ChatApp() {
                   <ArrowDown size={16} />
                 </button>
               )}
+              {helpersHere?.paused && chat && !liveHere && (
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-[12.5px]">
+                  <span className="flex items-center gap-1.5 text-muted">
+                    <UsersRound size={14} className="shrink-0" />
+                    {helpersHere.waiting === 1 ? "A helper report is" : `${helpersHere.waiting} helper reports are`} ready. {ai} already replied to
+                    helpers 3 times in a row, so it&apos;s waiting for you.
+                  </span>
+                  <Button variant="primary" onClick={() => roomForReply() && stream(chat.id, { action: "helpers", manual: true })}>
+                    Send to {ai}
+                  </Button>
+                </div>
+              )}
               {composer}
               <p className="mt-2 text-center text-[11px] text-faint">{ai} can make mistakes. Check important info.</p>
             </div>
           </>
         )}
       </main>
+      {helpersOpen && chat && <AgentsPanel state={helpersHere} ai={ai} onStop={stopHelpers} onClose={() => setHelpersOpen(false)} />}
 
       <SettingsDialog
         open={settingsOpen}

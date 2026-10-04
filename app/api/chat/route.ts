@@ -11,8 +11,10 @@ import { friendlyError, getClient, isAbort } from "@/lib/deepseek";
 import { DOC_TOOL_NAMES, docEdit, docsRoot, runDocReadTool } from "@/lib/docs";
 import { applyEdit, describe, EDIT_TOOL_NAMES, isEditError, previewEdit } from "@/lib/edits";
 import { GITHUB_TOOL_NAMES, runGithubTool } from "@/lib/github";
+import { HELPER_TOOL_NAMES, MAX_AUTO_ROUNDS } from "@/lib/helper-tools";
+import { mayHaveReports, reportsMessage, runHelperTool, takeReadyReports, type BrainContext } from "@/lib/helpers";
 import { PROVIDER_NAME } from "@/lib/models";
-import { endReply, finishOrTake, setPhase, startReply, takeQueued } from "@/lib/queue";
+import { endReply, finishOrTake, hasQueued, isReplying, setPhase, startReply, takeQueued } from "@/lib/queue";
 import type { Root } from "@/lib/roots";
 import { DeepSeekSession, type ModelSession, type StepCallbacks } from "@/lib/session";
 import { allowDocAutoSave, allowProjectCommand, discardUploads, getChat, getProject, getSettings, updateChat } from "@/lib/storage";
@@ -67,7 +69,9 @@ function commandSummary(r: CommandRun): string {
 
 interface Body {
   chatId: string;
-  action?: "send" | "regenerate" | "edit";
+  // "helpers": hand finished helpers' reports to the AI (automatic, or you pressed Send to the brain).
+  action?: "send" | "regenerate" | "edit" | "helpers";
+  manual?: boolean; // "helpers" because you asked (resets the automatic-reply count)
   text?: string;
   attachments?: Attachment[];
   messageId?: string;
@@ -99,10 +103,21 @@ export async function POST(req: Request) {
     const text = (body.text ?? "").trim();
     if (!text && !body.attachments?.length) return Response.json({ error: "Empty message" }, { status: 400 });
     userMessage = await buildUserMessage(text, body.attachments ?? [], settings.maxFileChars);
+  } else if (action === "helpers") {
+    if (isReplying(body.chatId)) return Response.json({ error: "It's replying: the reports go into that reply." }, { status: 409 });
+    if (!body.manual && (existing.helperAutoRounds ?? 0) >= MAX_AUTO_ROUNDS) {
+      return Response.json({ error: `Paused after ${MAX_AUTO_ROUNDS} automatic replies in a row.` }, { status: 409 });
+    }
+    const runs = await takeReadyReports(body.chatId);
+    if (!runs.length) return Response.json({ error: "No helper reports are waiting." }, { status: 409 });
+    userMessage = reportsMessage(runs);
   }
   const chat = await updateChat(body.chatId, (c) => {
     let changedAt = -1; // the first message that changed (a summary covering it no longer fits)
-    if (action === "send" && userMessage) {
+    // Automatic replies to helper reports count up; anything you do resets the count.
+    const autoRounds = action === "helpers" && !body.manual ? (c.helperAutoRounds ?? 0) + 1 : 0;
+    if ((c.helperAutoRounds ?? 0) !== autoRounds) c.helperAutoRounds = autoRounds;
+    if ((action === "send" || action === "helpers") && userMessage) {
       c.messages.push(userMessage);
     } else if (action === "regenerate") {
       while (c.messages.length && c.messages[c.messages.length - 1].role === "assistant") c.messages.pop();
@@ -233,6 +248,17 @@ export async function POST(req: Request) {
           await session.addUsers(users);
         };
         let incoming: UserMessage[] = []; // messages to hand the model before its next step
+        // Helpers: the brain's tools, and its rounds of helpers in this reply.
+        const brain: BrainContext = {
+          chat,
+          settings,
+          access: a,
+          rounds: { n: 0 },
+          signal: abort.signal,
+          interrupted: () => hasQueued(chat.id),
+          status: (text) => send({ type: "status", text }),
+          ping: () => send({ type: "ping" }),
+        };
 
         // Run one command the AI asked for (after approval, if it needed one), streaming its output.
         const runCommandJob = async (call: ToolCall, prep: Prepared, decision: Decision | undefined): Promise<Outcome> => {
@@ -299,6 +325,11 @@ export async function POST(req: Request) {
           // A break between steps: anything you sent meanwhile goes in now.
           const waiting = incoming.length ? incoming : round > 0 ? takeQueued(chat.id) : [];
           incoming = [];
+          // Helper reports whose whole round has finished go in too.
+          if (round > 0 && mayHaveReports(chat.id)) {
+            const runs = await takeReadyReports(chat.id);
+            if (runs.length) waiting.push(reportsMessage(runs));
+          }
           if (waiting.length) await deliver(waiting);
 
           const head = assistant.steps.length; // this API call's first step
@@ -449,6 +480,11 @@ export async function POST(req: Request) {
                   }
                 } else if (DOC_TOOL_NAMES.has(c.name)) {
                   outcomes[i] = docsPath ? await runDocReadTool(c.name, c.args, await getDocs()) : off("Docs folder is off", "the Docs folder is turned off.");
+                } else if (HELPER_TOOL_NAMES.has(c.name)) {
+                  outcomes[i] =
+                    a!.helpers || c.name !== "start_helpers"
+                      ? await runHelperTool(c.name, c.args, brain)
+                      : off("Helpers are off", "helpers are turned off for this chat (the Helpers button by the message box).");
                 } else if (SKILL_TOOL_NAMES.has(c.name)) {
                   outcomes[i] = skills.length ? await runSkillTool(c.name, c.args, skills) : off("No skills", "there are no skills set up.");
                 } else if (GITHUB_TOOL_NAMES.has(c.name)) {
@@ -614,6 +650,15 @@ export async function POST(req: Request) {
             throw new Error(`This chat is too long for ${ai}'s context window. Summarize it (the token meter's menu) or start a new chat.`);
           } else if (result.finish === "capacity") {
             throw new Error("DeepSeek ran out of capacity mid-reply. Retry in a moment.");
+          }
+          // Helper reports that came in while it was writing this answer: carry on with them.
+          if (mayHaveReports(chat.id)) {
+            const runs = await takeReadyReports(chat.id);
+            if (runs.length) {
+              session.addAssistant(callSteps, result);
+              incoming = [...takeQueued(chat.id), reportsMessage(runs)];
+              continue;
+            }
           }
           // Messages you sent while it was writing this answer: carry on with them right away.
           const more = finishOrTake(chat.id);
