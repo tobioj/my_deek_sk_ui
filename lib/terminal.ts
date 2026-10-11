@@ -169,7 +169,7 @@ export async function executeCommand(o: {
   root: Root;
   run: CommandRun;
   chatId: string | null;
-  by: "deepseek" | "claude" | "you"; // the AI that started it, or you (▶ Run)
+  by: "deepseek" | "claude" | "glm" | "you"; // the AI that started it, or you (▶ Run)
   signal?: AbortSignal;
   onStart?: (procId: string) => void;
   onOutput?: (chunk: string) => void;

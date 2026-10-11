@@ -18,6 +18,7 @@ const SOURCE: Record<NonNullable<KeyStatus["source"]>, string> = {
 const KEY_INFO: Record<Provider, { secret: string; env: string; where: string; placeholder: string }> = {
   deepseek: { secret: "deepseek", env: "DEEPSEEK_API_KEY", where: "platform.deepseek.com → API keys", placeholder: "sk-…" },
   claude: { secret: "anthropic", env: "ANTHROPIC_API_KEY", where: "console.anthropic.com → API keys (billed per use, separately from a Claude.ai plan)", placeholder: "sk-ant-…" },
+  glm: { secret: "glm", env: "GLM_API_KEY", where: "z.ai → API Keys (billed per use from your Z.ai balance)", placeholder: "Your Z.ai API key" },
 };
 
 type Msg = { ok: boolean; text: string } | null;

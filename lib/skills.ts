@@ -8,7 +8,7 @@
 //   - skills in a project's code: .claude/skills inside its folders (they move with the code)
 //   - optionally, one more folder on this computer (e.g. Claude Code's ~/.claude/skills)
 //
-// Every AI (DeepSeek or Claude) sees only each skill's name and description, and opens the full
+// Every AI (DeepSeek, Claude or GLM) sees only each skill's name and description, and opens the full
 // instructions with use_skill when a task matches. These tools only read inside skill folders;
 // nothing in them runs.
 import "server-only";

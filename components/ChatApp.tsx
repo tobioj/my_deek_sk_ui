@@ -9,11 +9,15 @@ import { estimateTokens } from "@/lib/tokens";
 import {
   aiName,
   DEEPSEEK_MODELS,
+  GLM_MODELS,
   isEffort,
   modelInfoFor,
   nearestEffort,
+  providerDefaults,
   providerOf,
+  PROVIDERS,
   type ModelInfo,
+  type Provider,
   type ProviderLimits,
 } from "@/lib/models";
 import type {
@@ -66,9 +70,10 @@ type SettingsData = {
   settings: Settings;
   key: KeyStatus;
   claudeKey: KeyStatus;
+  glmKey: KeyStatus;
   searchKey: KeyStatus;
   githubKey: KeyStatus;
-  models: { deepseek: ModelInfo[]; claude: ModelInfo[] };
+  models: Models;
   defaultSystemPrompt: string;
   platform: string;
 };
@@ -89,15 +94,20 @@ const cloneAssistant = (a: AssistantMessage): AssistantMessage => ({
   steps: a.steps.map((s) => ({ ...s, toolCalls: s.toolCalls?.map((c) => ({ ...c, ...(c.command ? { command: { ...c.command } } : {}) })) })),
 });
 
-// A new chat's model: the default from Settings, if its provider has a key; otherwise the other
-// provider's first model. Thinking and effort come from that provider's defaults.
-function newChatModel(d: { settings: Settings; key: KeyStatus | null; claudeKey: KeyStatus | null; models: { deepseek: ModelInfo[]; claude: ModelInfo[] } }) {
+type Models = Record<Provider, ModelInfo[]>;
+type Keys = Record<Provider, KeyStatus | null>;
+
+// The models of every provider you have a key for.
+const usableModels = (models: Models, keys: Keys) => PROVIDERS.flatMap((p) => (keys[p]?.configured ? models[p] : []));
+
+// A new chat's model: the default from Settings, if its provider has a key; otherwise the first
+// model of a provider that has one. Thinking and effort come from that provider's defaults.
+function newChatModel(d: { settings: Settings; keys: Keys; models: Models }) {
   const s = d.settings;
-  const usable = [...(d.key?.configured ? d.models.deepseek : []), ...(d.claudeKey?.configured ? d.models.claude : [])];
+  const usable = usableModels(d.models, d.keys);
   const model = !usable.length || usable.some((m) => m.id === s.defaultModel) ? s.defaultModel : usable[0].id;
-  const claude = providerOf(model) === "claude";
-  const effort = claude ? s.claudeEffort : s.effort;
-  return { model, thinking: claude ? s.claudeThinking : s.thinking, effort: isEffort(effort) ? effort : ("high" as const) };
+  const { thinking, effort } = providerDefaults(s, providerOf(model));
+  return { model, thinking, effort: isEffort(effort) ? effort : ("high" as const) };
 }
 
 function chatIdFromUrl(): string | null {
@@ -125,7 +135,9 @@ export function ChatApp() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [keyStatus, setKeyStatus] = useState<KeyStatus | null>(null);
   const [claudeKey, setClaudeKey] = useState<KeyStatus | null>(null);
-  const [models, setModels] = useState<{ deepseek: ModelInfo[]; claude: ModelInfo[] }>({ deepseek: DEEPSEEK_MODELS, claude: [] });
+  const [glmKey, setGlmKey] = useState<KeyStatus | null>(null);
+  const keys = useMemo<Keys>(() => ({ deepseek: keyStatus, claude: claudeKey, glm: glmKey }), [keyStatus, claudeKey, glmKey]);
+  const [models, setModels] = useState<Models>({ deepseek: DEEPSEEK_MODELS, claude: [], glm: GLM_MODELS });
   const [summarizing, setSummarizing] = useState(false);
   const [searchKey, setSearchKey] = useState<KeyStatus | null>(null);
   const [githubKey, setGithubKey] = useState<KeyStatus | null>(null);
@@ -297,6 +309,7 @@ export function ChatApp() {
     setSettings(data.settings);
     setKeyStatus(data.key);
     setClaudeKey(data.claudeKey);
+    setGlmKey(data.glmKey);
     setSearchKey(data.searchKey);
     setGithubKey(data.githubKey);
     setModels(data.models);
@@ -351,7 +364,7 @@ export function ChatApp() {
     api<SettingsData>("/api/settings")
       .then((data) => {
         applySettingsData(data);
-        setDraftPrefs((p) => ({ ...p, ...newChatModel(data) }));
+        setDraftPrefs((p) => ({ ...p, ...newChatModel({ settings: data.settings, keys: { deepseek: data.key, claude: data.claudeKey, glm: data.glmKey }, models: data.models }) }));
       })
       .catch(() => showToast("Couldn't load settings."));
     api<ProjectSummary[]>("/api/projects")
@@ -417,7 +430,7 @@ export function ChatApp() {
       window.history.pushState(null, "", "/");
       restoreDraft(projectId ? `new:${projectId}` : "new");
       setDraftPrefs((p) => ({
-        ...(settings ? newChatModel({ settings, key: keyStatus, claudeKey, models }) : { model: p.model, thinking: p.thinking, effort: p.effort }),
+        ...(settings ? newChatModel({ settings, keys, models }) : { model: p.model, thinking: p.thinking, effort: p.effort }),
         folders: [], // project folders are linked automatically
         hiddenProjectFolders: [],
         webSearch: false,
@@ -437,7 +450,7 @@ export function ChatApp() {
         });
       }
     },
-    [saveDraft, restoreDraft, settings, keyStatus, claudeKey, models],
+    [saveDraft, restoreDraft, settings, keys, models],
   );
 
   const renameChat = async (id: string, title: string) => {
@@ -480,9 +493,9 @@ export function ChatApp() {
 
   // The chat's model, what it can do, and what its provider may do (Settings → limits).
   const available = useMemo(() => {
-    const list = [...(keyStatus?.configured ? models.deepseek : []), ...(claudeKey?.configured ? models.claude : [])];
+    const list = usableModels(models, keys);
     return list.length ? list : models.deepseek; // no key yet: show DeepSeek's models
-  }, [keyStatus, claudeKey, models]);
+  }, [keys, models]);
   const info = modelInfoFor(prefs.model, models.claude);
   const ai = aiName(prefs.model);
   const limits: ProviderLimits = settings?.limits[info.provider] ?? { folders: true, edit: true, auto: true, commands: true, github: true, docs: true, search: true, code: false };
@@ -537,8 +550,8 @@ export function ChatApp() {
   })();
 
   const updatePrefs = async (patch: Partial<Prefs>) => {
-    if (patch.webSearch && providerOf(prefs.model) === "deepseek" && !searchKey?.configured) {
-      showToast("Add your free Tavily key to use web search with DeepSeek.");
+    if (patch.webSearch && providerOf(prefs.model) !== "claude" && !searchKey?.configured) {
+      showToast(`Add your free Tavily key to use web search with ${ai}.`);
       setSettingsOpen(true);
       return;
     }
@@ -547,8 +560,7 @@ export function ChatApp() {
       // the new model takes it.
       const next = modelInfoFor(patch.model, models.claude);
       if (next.provider !== providerOf(prefs.model)) {
-        const d = next.provider === "claude" ? { thinking: settings.claudeThinking, effort: settings.claudeEffort } : { thinking: settings.thinking, effort: settings.effort };
-        patch = { ...d, ...patch };
+        patch = { ...providerDefaults(settings, next.provider), ...patch };
       }
       const effort = nearestEffort(patch.effort ?? prefs.effort, next.efforts);
       if (effort) patch = { ...patch, effort };
@@ -1292,7 +1304,7 @@ export function ChatApp() {
     }
     return null;
   })();
-  const keyMissing = keyStatus !== null && !keyStatus.configured && !claudeKey?.configured;
+  const keyMissing = keyStatus !== null && !PROVIDERS.some((p) => keys[p]?.configured);
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   const canSummarize = !!chat && !liveHere && !!lastAssistant && chat.summary?.upto !== lastAssistant.id;
   const isEmpty = messages.length === 0 && !liveHere;
@@ -1511,7 +1523,7 @@ export function ChatApp() {
             {keyMissing && (
               <div className="mt-8 flex max-w-lg items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3 text-[13.5px]">
                 <KeyRound size={18} className="shrink-0 text-accent" />
-                <span className="flex-1 text-muted">Add a DeepSeek or Claude API key to start chatting. It&apos;s stored securely on this computer.</span>
+                <span className="flex-1 text-muted">Add a DeepSeek, Claude or GLM API key to start chatting. It&apos;s stored securely on this computer.</span>
                 <Button variant="primary" onClick={() => setSettingsOpen(true)}>
                   Add key
                 </Button>
@@ -1612,6 +1624,7 @@ export function ChatApp() {
         settings={settings}
         keyStatus={keyStatus}
         claudeKey={claudeKey}
+        glmKey={glmKey}
         searchKey={searchKey}
         githubKey={githubKey}
         models={models}
@@ -1619,7 +1632,7 @@ export function ChatApp() {
         onKeysChanged={() => loadSettings().catch(() => {})}
         onSaved={(s) => {
           // A new default model applies to the chat you're starting (if you haven't sent it yet).
-          if (!chatRef.current && s.defaultModel !== settings?.defaultModel) setDraftPrefs((p) => ({ ...p, ...newChatModel({ settings: s, key: keyStatus, claudeKey, models }) }));
+          if (!chatRef.current && s.defaultModel !== settings?.defaultModel) setDraftPrefs((p) => ({ ...p, ...newChatModel({ settings: s, keys, models }) }));
           setSettings(s);
         }}
       />

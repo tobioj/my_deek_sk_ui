@@ -249,7 +249,7 @@ export function QueuedBubble({
   onCancel,
 }: {
   message: UserMessage;
-  ai: string; // "DeepSeek" or "Claude"
+  ai: string; // "DeepSeek", "Claude" or "GLM"
   busy: boolean; // "Answer together now" was clicked
   onNow: () => void;
   onCancel: () => void;

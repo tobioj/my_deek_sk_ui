@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { ownFolders, projectFolders } from "./folders";
-import { ALL_ALLOWED, isEffort, LIMIT_KEYS, NONE_ALLOWED, providerOf, validModelId, type ProviderLimits } from "./models";
+import { ALL_ALLOWED, isEffort, LIMIT_KEYS, NONE_ALLOWED, providerDefaults, providerOf, validModelId, type ProviderLimits } from "./models";
 import { skillKey, type Chat, type ChatSummary, type Project, type ProjectSummary, type Settings } from "./types";
 
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
@@ -30,8 +30,9 @@ export const DEFAULT_SETTINGS: Settings = {
   effort: "high",
   claudeThinking: true,
   claudeEffort: "medium",
-  // DeepSeek keeps everything it could do before; Claude starts with nothing, and you switch on what you want.
-  limits: { deepseek: { ...ALL_ALLOWED, code: false }, claude: { ...NONE_ALLOWED } },
+  glmEffort: "high",
+  // DeepSeek keeps everything it could do before; Claude and GLM start with nothing, and you switch on what you want.
+  limits: { deepseek: { ...ALL_ALLOWED, code: false }, claude: { ...NONE_ALLOWED }, glm: { ...NONE_ALLOWED } },
   claudeMaxSearches: 5,
   claudeBlockedSites: [],
   claudeFallback: true,
@@ -134,15 +135,15 @@ export async function createChat(
   const settings = await getSettings();
   const now = new Date().toISOString();
   const model = init.model ?? settings.defaultModel;
-  const claude = providerOf(model) === "claude"; // each provider has its own thinking and effort defaults
+  const defaults = providerDefaults(settings, providerOf(model)); // each provider has its own thinking and effort defaults
   const chat: Chat = {
     id: nanoid(12),
     title: "New chat",
     createdAt: now,
     updatedAt: now,
     model,
-    thinking: init.thinking ?? (claude ? settings.claudeThinking : settings.thinking),
-    effort: init.effort ?? (claude ? settings.claudeEffort : settings.effort),
+    thinking: init.thinking ?? defaults.thinking,
+    effort: init.effort ?? defaults.effort,
     folders: init.folders ?? [],
     hiddenProjectFolders: init.hiddenProjectFolders ?? [],
     webSearch: init.webSearch ?? false,
@@ -173,7 +174,7 @@ export async function deleteChat(id: string): Promise<void> {
 }
 
 // Keys only land here on machines without a macOS Keychain.
-type StoredSettings = Settings & { apiKey?: string; anthropicKey?: string; tavilyKey?: string; githubToken?: string };
+type StoredSettings = Settings & { apiKey?: string; anthropicKey?: string; glmKey?: string; tavilyKey?: string; githubToken?: string };
 
 async function readStoredSettings(): Promise<StoredSettings> {
   try {
@@ -182,17 +183,21 @@ async function readStoredSettings(): Promise<StoredSettings> {
     const limits = {
       deepseek: { ...DEFAULT_SETTINGS.limits.deepseek, ...stored.limits?.deepseek },
       claude: { ...DEFAULT_SETTINGS.limits.claude, ...stored.limits?.claude },
+      glm: { ...DEFAULT_SETTINGS.limits.glm, ...stored.limits?.glm },
     };
     return { ...DEFAULT_SETTINGS, ...stored, limits };
   } catch {
-    return { ...DEFAULT_SETTINGS, limits: { deepseek: { ...DEFAULT_SETTINGS.limits.deepseek }, claude: { ...DEFAULT_SETTINGS.limits.claude } } };
+    return {
+      ...DEFAULT_SETTINGS,
+      limits: { deepseek: { ...DEFAULT_SETTINGS.limits.deepseek }, claude: { ...DEFAULT_SETTINGS.limits.claude }, glm: { ...DEFAULT_SETTINGS.limits.glm } },
+    };
   }
 }
 
 // Settings as the browser sees them — never includes API keys.
 export async function getSettings(): Promise<Settings> {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { apiKey, anthropicKey, tavilyKey, githubToken, ...rest } = await readStoredSettings();
+  const { apiKey, anthropicKey, glmKey, tavilyKey, githubToken, ...rest } = await readStoredSettings();
   return rest;
 }
 
@@ -215,10 +220,12 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   if (patch.effort === "high" || patch.effort === "max") next.effort = patch.effort;
   if (typeof patch.claudeThinking === "boolean") next.claudeThinking = patch.claudeThinking;
   if (isEffort(patch.claudeEffort)) next.claudeEffort = patch.claudeEffort;
+  if (patch.glmEffort === "low" || patch.glmEffort === "high" || patch.glmEffort === "max") next.glmEffort = patch.glmEffort;
   if (patch.limits && typeof patch.limits === "object") {
     next.limits = {
       deepseek: { ...validLimits(patch.limits.deepseek, current.limits.deepseek), code: false },
       claude: validLimits(patch.limits.claude, current.limits.claude),
+      glm: { ...validLimits(patch.limits.glm, current.limits.glm), code: false },
     };
   }
   if (typeof patch.claudeMaxSearches === "number") next.claudeMaxSearches = Math.max(1, Math.min(50, Math.round(patch.claudeMaxSearches)));
@@ -262,7 +269,7 @@ export async function allowDocAutoSave(absPath: string): Promise<void> {
 }
 
 // Fallback key storage for machines without a macOS Keychain.
-const SECRET_FIELDS = { deepseek: "apiKey", anthropic: "anthropicKey", tavily: "tavilyKey", github: "githubToken" } as const;
+const SECRET_FIELDS = { deepseek: "apiKey", anthropic: "anthropicKey", glm: "glmKey", tavily: "tavilyKey", github: "githubToken" } as const;
 
 export async function getStoredSecret(name: keyof typeof SECRET_FIELDS): Promise<string | undefined> {
   return (await readStoredSettings())[SECRET_FIELDS[name]] || undefined;

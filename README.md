@@ -1,6 +1,6 @@
 # DeepSeek Chat
 
-A personal, Claude-desktop-style chat app for the DeepSeek and Claude APIs. Put in either key (or both) and it works. It runs on your own computer (Mac or Windows) and only that computer can reach it.
+A personal, Claude-desktop-style chat app for the DeepSeek, Claude and GLM (Z.ai) APIs. Put in any of the keys (or all of them) and it works. It runs on your own computer (Mac or Windows) and only that computer can reach it.
 
 **Quick reference for every command: [CHEATSHEET.md](CHEATSHEET.md)**
 
@@ -32,7 +32,7 @@ Do this once. Put the app somewhere permanent (not Downloads): the shortcut, the
    deepseek-chat
    ```
    The first start builds the app. It takes a few minutes and only shows "Building the app…". **Don't close the window or press Ctrl + C**; the app opens by itself when it's ready.
-5. In the app, open **Settings → AI providers** and paste your DeepSeek API key, your Claude API key, or both. They're stored encrypted with your Windows login.
+5. In the app, open **Settings → AI providers** and paste your DeepSeek, Claude or GLM API key (or several). They're stored encrypted with your Windows login.
 
 **Mac** (Terminal):
 
@@ -54,7 +54,7 @@ Do this once. Put the app somewhere permanent (not Downloads): the shortcut, the
    deepseek-chat
    ```
    The first start builds the app (a few minutes). Don't close the window or press Ctrl + C; the app opens by itself.
-5. In the app, open **Settings → AI providers** and paste your DeepSeek API key, your Claude API key, or both. They're stored in the macOS Keychain.
+5. In the app, open **Settings → AI providers** and paste your DeepSeek, Claude or GLM API key (or several). They're stored in the macOS Keychain.
 
 ### Every day (both systems)
 
@@ -124,14 +124,17 @@ Then open http://127.0.0.1:3456. It runs only while that terminal stays open (Ct
 
 ## Your API keys
 
-You need at least one: **DeepSeek** (platform.deepseek.com → API keys) or **Claude** (console.anthropic.com → API keys; billed per use, separately from a Claude.ai plan). Add them in **Settings → AI providers → Save key**; each is tested right away. **Remove** deletes a key from this computer (your chats are kept).
+You need at least one: **DeepSeek** (platform.deepseek.com → API keys), **Claude** (console.anthropic.com → API keys; billed per use, separately from a Claude.ai plan) or **GLM** (z.ai → API Keys; billed per use from your Z.ai balance). Add them in **Settings → AI providers → Save key**; each is tested right away. **Remove** deletes a key from this computer (your chats are kept).
 
-Keys are stored on this computer only: in the macOS Keychain on a Mac, encrypted with your Windows login on Windows. They're never put in a file and never sent to the browser, and the Claude key only ever goes to Anthropic. On the Mac you can also set them in Terminal (it asks you to paste the key):
+Keys are stored on this computer only: in the macOS Keychain on a Mac, encrypted with your Windows login on Windows (in `data/secrets`, readable only by your Windows account). They're never put in a plain file and never sent to the browser; the Claude key only ever goes to Anthropic and the GLM key only to Z.ai. On the Mac you can also set them in Terminal (it asks you to paste the key):
 
 ```bash
 security add-generic-password -U -a "$USER" -s deepseek-api-key -w
 security add-generic-password -U -a "$USER" -s anthropic-api-key -w
+security add-generic-password -U -a "$USER" -s glm-api-key -w
 ```
+
+On Windows, use **Settings → AI providers** (that's what encrypts the key).
 
 The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same DeepSeek Keychain entry.
 
@@ -143,7 +146,7 @@ The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same 
 | **Attach a folder** | Drag a folder in, or **+ → Add a folder…** to get a checklist of its files. `node_modules`, `.git`, builds and binaries are skipped automatically, and `.env` files are always blocked. |
 | **Let DeepSeek explore a project** | **+ → Add a folder… → Let DeepSeek explore it.** DeepSeek then lists, reads and searches the files it needs by itself (read-only), just like Claude Code. |
 | **@-mention a file** | With a project folder open, type `@` and pick a file to attach it. |
-| **Thinking** | The **Think** button turns step-by-step reasoning on or off; the model menu sets the effort (DeepSeek: High / Max; Claude: Low to Max, depending on the model). The newest Opus and Fable always think. |
+| **Thinking** | The **Think** button turns step-by-step reasoning on or off; the model menu sets the effort (DeepSeek: High / Max; Claude: Low to Max, depending on the model; GLM: Low / High / Max). The newest Opus and Fable, and GLM, always think. |
 | **Web search** | Off by default. Turn it on in **Settings → Web search** and add a free [Tavily](https://app.tavily.com) key (1,000 searches a month). A **Search** button then appears next to Think; when it's on, DeepSeek can search the web, read pages and cite sources. |
 | **Ask / Plan / Edit / Auto** | With a folder open: **Ask** reads and answers. **Plan** writes a step-by-step plan without changing anything. **Edit** changes files, with a before/after preview and Approve/Reject for every change. **Auto** makes all the changes without asking. Every reply's changes can be undone. |
 | **Docs folder** | DeepSeek can create and update documents there in any mode (it asks first, or not, per doc). Settings sets the default; projects can set their own. |
@@ -152,8 +155,8 @@ The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same 
 | **GitHub (read-only)** | Fine-grained token, repos you tick in Settings, repos picked per project, and a GitHub button per chat (off by default). Reads code, issues, PRs, commits and CI; can't change anything. |
 | **Projects** | Group chats in the sidebar. Each project has shared context, shared files, **folders linked to every chat in it**, and a memory setting (*Project + global* or *This project only*). Chats can switch off a project folder or add their own. |
 | **Several folders** | Link as many folders as you like to a chat or project. DeepSeek sees each by name (`backend/src/app.py`, `web/src/App.tsx`) and can search, read and edit across all of them. |
-| **Models** | DeepSeek **V4.1 Flash** (fast, cheap, sees images) or **V4 Pro** (smartest, text only), and every Claude model your key can use, from Haiku to Fable (the list comes from your key). Pick per chat in the model menu; **Settings → Defaults for new chats** sets which one new chats start with. |
-| **Long chats** | Past 200K tokens (change it in **Settings → Long chats**; sooner for models with a smaller context), the earlier messages are summarized so the chat can keep going. **Summarize** in the token ring does it any time. Works for DeepSeek and Claude. |
+| **Models** | DeepSeek **V4.1 Flash** (fast, cheap, sees images) or **V4 Pro** (smartest, text only); every Claude model your key can use, from Haiku to Fable (the list comes from your key); and **GLM-5.3** (smartest, text only) or **GLM-5.3 Flash** (fast, cheap, sees images). Pick per chat in the model menu; **Settings → Defaults for new chats** sets which one new chats start with. |
+| **Long chats** | Past 200K tokens (change it in **Settings → Long chats**; sooner for models with a smaller context), the earlier messages are summarized so the chat can keep going. **Summarize** in the token ring does it any time. Works for every provider. |
 | **Skills** | Instructions you keep for kinds of tasks (how you like reports written, a checklist, a template). Every AI opens the matching skill when a task needs it. See **Skills** below. |
 | **Helpers** | Switch on **Helpers** by the message box, and the AI can send helpers to research parts of a big task at the same time. They only read; the AI judges their reports and does the acting. See **Helpers** below. |
 | **Token meter** | The ring next to the model picker shows how full the conversation is, what it's cost so far, and what the next message will cost. |
@@ -177,6 +180,19 @@ Everything above works with Claude too. A few things are Claude's own:
 | **Declines** | If Claude's safety checks flag a harmless request, another Claude model can answer instead (on by default, in **Web search and safety options**); the reply says so. |
 | **Costs** | Each reply shows what it cost, and the token ring shows the chat's total. Prices are in `lib/models.ts`. |
 
+### GLM (Z.ai)
+
+Everything in **What you can do** works with GLM too: folders, Ask / Plan / Edit / Auto, the terminal, GitHub, the Docs folder, web search, skills, helpers and long-chat summaries, under the same rules and approvals as DeepSeek.
+
+| | |
+|---|---|
+| **Models** | **GLM-5.3** (`glm-5.3`, Z.ai's flagship, text only, 1M context) and **GLM-5.3 Flash** (`glm-5.3-flash`, fast and cheap, sees images). Both always think; the effort (Low / High / Max) sets how much. **Settings → Defaults for new chats → GLM: effort** sets the default (High). |
+| **What GLM may do** | **Settings → AI providers → What GLM may do**: the same switches as DeepSeek (Read folders, Change files, Auto mode, Run commands, Read GitHub, Save to Docs, Web search). **All off to start**, like Claude; switch on what you want. |
+| **Billing** | Pay as you go: billed per token from the credit you top up at z.ai. A **GLM Coding Plan** subscription can't be used here: Z.ai only allows it in its supported tools (Claude Code, Cline, Cursor…) and can restrict or ban accounts that use it elsewhere, so the app always uses the pay-as-you-go endpoint. |
+| **Web search** | Through Tavily, the same as DeepSeek (**Settings → Web search** and a free Tavily key). |
+| **Titles and summaries** | Written by GLM-5.3 Flash. |
+| **Costs** | GLM-5.3: $1.40 in / $4.40 out per million tokens ($0.26 for cached input); Flash: $0.15 / $0.50. Prices are in `lib/tokens.ts`. |
+
 ### Skills
 
 A skill is a folder with a `SKILL.md` file: a short header with its name and a one-line description of when to use it, then the instructions. It can hold other files too (templates, examples). It's the same format Claude Code and Claude.ai use.
@@ -189,7 +205,7 @@ description: How I like my weekly status reports written
 Keep it under a page. Start with wins, then blockers…
 ```
 
-DeepSeek and Claude only see each skill's name and description, and open the full skill when a task matches, so you can keep many without paying for them in every message. They can only read skills; nothing in a skill runs.
+Every AI only sees each skill's name and description, and open the full skill when a task matches, so you can keep many without paying for them in every message. They can only read skills; nothing in a skill runs.
 
 | Where | What |
 |---|---|
@@ -215,7 +231,7 @@ In Project settings you can also switch off **Also use my skills** (off by defau
 For big tasks that split into parts (research across several sources, exploring different areas of a codebase, comparing options), the AI in a chat can send **helpers** and act as the "brain":
 
 - **Switch it on per chat** with the **Helpers** button by the message box. It's off in new chats. When it's on, the AI decides by itself when a task is worth splitting up.
-- **A helper** is a separate run of the same model as the chat (DeepSeek chats get DeepSeek helpers, Claude chats get Claude helpers, with the same thinking and effort). It starts with an empty context: it sees only the task the AI wrote, never your conversation.
+- **A helper** is a separate run of the same model as the chat (DeepSeek chats get DeepSeek helpers, Claude chats get Claude helpers, GLM chats get GLM helpers, with the same thinking and effort). It starts with an empty context: it sees only the task the AI wrote, never your conversation.
 - **Helpers only read and research**: the project's folders, the web (if Search is on), GitHub (if it's on), skills and the Docs folder. They never change files, run commands or save documents. The AI does all of that, under your usual approvals.
 - **Watch them** in the helpers panel: the **● 2 helpers working** button at the top right (it opens by itself on wide windows). Each helper shows what it's doing, its time, steps and cost, and opens to its task, steps and report.
 - **Stopping is separate.** The Stop button in the chat stops the AI's reply, not its helpers. Stop helpers in the panel (one, or **Stop all**); the AI can stop them too. Quitting the app stops them.
@@ -233,6 +249,7 @@ Everything is in `data/` (ignored by Git): one JSON file per chat in `data/chats
 - In Ask and Plan mode, DeepSeek's folder access is **read-only**. In Edit mode, every change needs your approval; in Auto mode changes apply straight away. Either way, each reply's changes can be undone. Either way, it can't leave the folder you chose, including through symlinks, and it never touches `.git`, `node_modules` or secret files.
 - `.env`, private keys and similar secret files are never read or attached, and never read from or copied into skills.
 - Your Claude key is only ever sent to Anthropic (`api.anthropic.com`). The app ignores `ANTHROPIC_BASE_URL`, which tools like Claude Code (and the `deepseek` command) set for themselves.
+- Your GLM key is only ever sent to Z.ai (`api.z.ai`). The app ignores other tools' settings such as `ZAI_*` and `ANTHROPIC_BASE_URL`.
 - Claude's code execution runs in Anthropic's sandbox, never on your computer. It only gets the files you attach to that chat.
 - Terminal commands only run in projects where you've switched Terminal on, only in the project's folders, and (on the Mac) inside the macOS sandbox. `sudo`, `git push`, `git reset --hard`, `gh`, `curl … | sh` and background tricks like `&` never run; risky commands always ask, even with **Run without asking** on. Closing the window doesn't stop running commands; `deepseek-chat stop` does.
 
@@ -248,9 +265,10 @@ After changing code, `deepseek-chat restart` rebuilds and restarts the everyday 
 
 | File | Purpose |
 |---|---|
-| `app/api/chat/route.ts` | Sends the conversation to DeepSeek or Claude, runs the tools, streams the reply, saves it |
+| `app/api/chat/route.ts` | Sends the conversation to DeepSeek, Claude or GLM, runs the tools, streams the reply, saves it |
 | `lib/access.ts` | What the AI may do in a chat: Settings and each provider's limits, then the project, then the chat |
-| `lib/conversation.ts`, `lib/session.ts` | The instructions, and DeepSeek's message format and streaming |
+| `lib/conversation.ts`, `lib/session.ts` | The instructions, and DeepSeek's and GLM's message format and streaming |
+| `lib/glm.ts`, `lib/providers.ts` | The GLM (Z.ai) client and its error messages; what differs between providers |
 | `lib/claude.ts`, `lib/claude-session.ts` | The Claude client, the model list from your key, Claude's message format, web search, code execution, files |
 | `lib/summarize.ts` | Summarizing long chats (Claude's own, or written by the app) |
 | `lib/skills.ts` | Skills: finding them, importing, the read-only skill tools |
@@ -266,7 +284,7 @@ After changing code, `deepseek-chat restart` rebuilds and restarts the everyday 
 | `lib/sandbox.ts`, `lib/processes.ts`, `lib/terminal.ts` | Running commands: the macOS sandbox profile, the Running list, DeepSeek's command tools |
 | `lib/secrets.ts` | API keys in the macOS Keychain (or encrypted with your Windows login) |
 | `lib/skip.ts` | Skip rules for junk folders, binaries and secrets |
-| `lib/models.ts` | DeepSeek models, Claude prices, and the per-provider switches (update here if prices change) |
-| `lib/tokens.ts` | DeepSeek prices and token estimates |
+| `lib/models.ts` | DeepSeek and GLM models, Claude prices, and the per-provider switches (update here if prices change) |
+| `lib/tokens.ts` | DeepSeek and GLM prices and token estimates |
 | `lib/types.ts` | The shapes of chats, projects and settings |
 | `components/` | The interface |

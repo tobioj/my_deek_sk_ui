@@ -1,13 +1,13 @@
 // Long chats: the earlier messages are summarized, and the AI continues from the summary.
-// Claude models that support it write the summary themselves (on-demand compaction); for DeepSeek
-// and the other Claude models the app asks the model to summarize a transcript. You still see the
+// Claude models that support it write the summary themselves (on-demand compaction); for DeepSeek,
+// GLM and the other Claude models the app asks the model to summarize a transcript. You still see the
 // whole chat; only what's sent to the AI gets shorter.
 import "server-only";
 import type { ChatAccess } from "./access";
 import { claudeModelInfo, getClaudeClient } from "./claude";
 import { ClaudeSession } from "./claude-session";
-import { getClient } from "./deepseek";
-import { DEEPSEEK_MODELS, providerOf, type ModelInfo } from "./models";
+import { modelInfoFor, PROVIDER_NAME, providerOf, SMALL_MODEL, type ModelInfo, type OpenAIProvider } from "./models";
+import { openAIClient } from "./providers";
 import { summaryStart } from "./conversation";
 import { priceOf } from "./tokens";
 import type { Chat, ChatSummaryNote, Settings } from "./types";
@@ -20,7 +20,7 @@ const INSTRUCTIONS =
   "latest request. If there's an earlier summary, fold it in. Write compact notes. Don't call tools; reply with the summary only.";
 
 export async function modelInfo(model: string): Promise<ModelInfo> {
-  return providerOf(model) === "claude" ? claudeModelInfo(model) : (DEEPSEEK_MODELS.find((m) => m.id === model) ?? DEEPSEEK_MODELS[0]);
+  return providerOf(model) === "claude" ? claudeModelInfo(model) : modelInfoFor(model);
 }
 
 // Should this reply start by summarizing? Yes once the last reply's conversation passed the
@@ -118,30 +118,35 @@ export async function summarizeChat(o: {
     return { summary: { upto, text, model: chat.model, createdAt: now, cost }, cost };
   }
 
-  // DeepSeek: Flash writes the summary (cheap and fast, with a 1M-token window).
-  const client = await getClient();
+  // DeepSeek and GLM: their Flash model writes the summary (cheap and fast, with a 1M-token window).
+  // DeepSeek's skips thinking; GLM's always thinks, so it gets room for that.
+  const provider = info.provider as OpenAIProvider;
+  const model = SMALL_MODEL[provider];
+  const client = await openAIClient(provider);
   const res = await client.chat.completions.create(
     {
-      model: "deepseek-flash",
-      max_tokens: 8000,
+      model,
+      max_tokens: provider === "glm" ? 32_000 : 8000,
       messages: [
         { role: "system", content: INSTRUCTIONS },
         { role: "user", content: transcript(chat, upto, 2_400_000) },
       ],
-      ...({ thinking: { type: "disabled" } } as object),
+      ...((provider === "glm" ? { thinking: { type: "enabled" }, reasoning_effort: "high" } : { thinking: { type: "disabled" } }) as object),
     },
     { signal: o.signal },
   );
   const text = res.choices[0]?.message?.content?.trim() ?? "";
-  if (!text) throw new Error("DeepSeek didn't return a summary.");
-  const u = res.usage as unknown as Record<string, number> | undefined;
-  const hit = u?.prompt_cache_hit_tokens ?? 0;
-  const cost = costOfDeepSeek(u, hit);
-  return { summary: { upto, text, model: "deepseek-flash", createdAt: now, cost }, cost };
+  if (!text) throw new Error(`${PROVIDER_NAME[provider]} didn't return a summary.`);
+  const cost = costOfOpenAI(model, res.usage as unknown as Record<string, unknown> | undefined);
+  return { summary: { upto, text, model, createdAt: now, cost }, cost };
 }
 
-function costOfDeepSeek(u: Record<string, number> | undefined, hit: number): number {
+// DeepSeek reports cache hits as prompt_cache_hit_tokens, GLM as prompt_tokens_details.cached_tokens.
+function costOfOpenAI(model: string, u: Record<string, unknown> | undefined): number {
   if (!u) return 0;
-  const prompt = u.prompt_tokens ?? 0;
-  return priceOf("deepseek-flash", { cacheHitTokens: hit, cacheMissTokens: u.prompt_cache_miss_tokens ?? prompt - hit, completionTokens: u.completion_tokens ?? 0 }) ?? 0;
+  const n = (v: unknown) => (typeof v === "number" ? v : 0);
+  const prompt = n(u.prompt_tokens);
+  const hit = n(u.prompt_cache_hit_tokens) || n((u.prompt_tokens_details as { cached_tokens?: number } | undefined)?.cached_tokens);
+  const miss = u.prompt_cache_miss_tokens !== undefined ? n(u.prompt_cache_miss_tokens) : prompt - hit;
+  return priceOf(model, { cacheHitTokens: hit, cacheMissTokens: miss, completionTokens: n(u.completion_tokens) }) ?? 0;
 }

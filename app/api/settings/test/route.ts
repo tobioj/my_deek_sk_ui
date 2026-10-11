@@ -1,7 +1,9 @@
 // POST /api/settings/test?provider=… — checks a key works without spending anything.
-// DeepSeek and Claude: list models (for Claude, this also refreshes the model picker). Tavily: reads this month's usage.
+// DeepSeek, Claude and GLM: list models (for Claude, this also refreshes the model picker). Tavily: reads this month's usage.
+import { APIError } from "openai";
 import { claudeModels, friendlyClaudeError } from "@/lib/claude";
 import { friendlyError, getClient } from "@/lib/deepseek";
+import { friendlyGlmError, getGlmClient } from "@/lib/glm";
 import { githubAccount, githubRepoExists } from "@/lib/github";
 import { tavilyUsage } from "@/lib/websearch";
 
@@ -20,6 +22,16 @@ export async function POST(req: Request) {
         return Response.json({ ok: true, models: models.map((m) => m.id) });
       } catch (e) {
         return Response.json({ ok: false, error: friendlyClaudeError(e) });
+      }
+    }
+    if (provider === "glm") {
+      // Z.ai checks the key before anything else, so a key it accepts passes even if this list isn't offered.
+      try {
+        const client = await getGlmClient();
+        const models = await client.models.list().catch((e) => (e instanceof APIError && e.status === 404 ? null : Promise.reject(e)));
+        return Response.json({ ok: true, models: models?.data.map((m) => m.id) });
+      } catch (e) {
+        return Response.json({ ok: false, error: friendlyGlmError(e) });
       }
     }
     if (provider === "tavily") {

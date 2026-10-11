@@ -44,7 +44,7 @@ export async function resolveAccess(chat: Chat, settings: Settings, req: Request
   // Folders that were moved or deleted are skipped.
   const roots = limits.folders ? await resolveRoots(chatLinkedFolders(chat, project)) : [];
   const root = roots.length > 0;
-  // DeepSeek searches through Tavily (Settings flag + key); Claude uses its own web search.
+  // DeepSeek and GLM search through Tavily (Settings flag + key); Claude uses its own web search.
   const web =
     limits.search &&
     !!chat.webSearch &&
@@ -63,14 +63,14 @@ export async function resolveAccess(chat: Chat, settings: Settings, req: Request
   // Terminal: only in a project with Terminal on, and only in that project's folders.
   const terminal = limits.commands ? terminalAccess(project, roots, appPortsFor(req)) : null;
   const code = provider === "claude" && limits.code && !!chat.code;
-  // Skills: read-only instructions, the same for DeepSeek and Claude. Skills in the project's code
+  // Skills: read-only instructions, the same for every provider. Skills in the project's code
   // (.claude/skills) come only from the project folders the chat can use.
   const skills = await skillsFor(settings, project, roots.filter((r) => r.source === "project").map((r) => r.abs));
   const tools = [
     ...(root ? WORKSPACE_TOOLS : []),
     ...(root && editing ? EDIT_TOOLS : []),
     ...(docsPath ? DOC_TOOLS : []),
-    ...(web && provider === "deepseek" ? WEB_TOOLS : []),
+    ...(web && provider !== "claude" ? WEB_TOOLS : []),
     ...(github ? GITHUB_TOOLS : []),
     ...(terminal ? COMMAND_TOOLS : []),
     ...(skills.length ? SKILL_TOOLS : []),

@@ -13,7 +13,7 @@ import type { OutputFile } from "./types";
 
 export class MissingClaudeKeyError extends Error {
   constructor() {
-    super("No Claude API key is set. Open Settings (bottom-left) and add your key, or switch this chat to a DeepSeek model.");
+    super("No Claude API key is set. Open Settings (bottom-left) and add your key, or switch this chat to another model.");
   }
 }
 

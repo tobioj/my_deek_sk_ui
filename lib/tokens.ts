@@ -2,12 +2,19 @@
 // DeepSeek: USD per 1M tokens at off-peak rates; peak hours cost double.
 // Source: https://api-docs.deepseek.com/quick_start/pricing
 // Claude: see claudePrice() in models.ts (no peak hours).
+// GLM: USD per 1M tokens, Z.ai's pay-as-you-go prices (no peak hours). Source: docs.z.ai/guides/overview/pricing
+// (October 2026).
 import { claudePrice, providerOf, WEB_SEARCH_PRICE } from "./models";
 import type { Usage } from "./types";
 
 const DEEPSEEK_PRICES: Record<string, { cacheHit: number; cacheMiss: number; output: number }> = {
   "deepseek-flash": { cacheHit: 0.003, cacheMiss: 0.15, output: 0.6 },
   "deepseek-v4-pro": { cacheHit: 0.022, cacheMiss: 0.66, output: 1.98 },
+};
+
+const GLM_PRICES: Record<string, { cacheHit: number; cacheMiss: number; output: number }> = {
+  "glm-5.3": { cacheHit: 0.26, cacheMiss: 1.4, output: 4.4 },
+  "glm-5.3-flash": { cacheHit: 0.03, cacheMiss: 0.15, output: 0.5 },
 };
 
 // Peak: 01:00–04:00 and 06:00–10:00 UTC, Monday to Friday.
@@ -27,6 +34,10 @@ export function priceOf(model: string, u: Counts, when = new Date()): number | n
     if (!p) return null;
     const tokens = u.cacheMissTokens * p.input + (u.cacheWriteTokens ?? 0) * p.input * 1.25 + u.cacheHitTokens * p.cacheRead + u.completionTokens * p.output;
     return tokens / 1_000_000 + (u.searches ?? 0) * WEB_SEARCH_PRICE;
+  }
+  if (providerOf(model) === "glm") {
+    const p = GLM_PRICES[model] ?? GLM_PRICES["glm-5.3"];
+    return (u.cacheHitTokens * p.cacheHit + u.cacheMissTokens * p.cacheMiss + u.completionTokens * p.output) / 1_000_000;
   }
   const p = DEEPSEEK_PRICES[model] ?? DEEPSEEK_PRICES["deepseek-flash"];
   const mult = isPeak(when) ? 2 : 1;

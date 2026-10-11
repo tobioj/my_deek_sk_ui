@@ -1,5 +1,5 @@
 // Shared types used by both the server (API routes) and the browser (components).
-import type { Effort, ProviderLimits } from "./models";
+import type { Effort, ProviderLimitsMap } from "./models";
 export type { Effort } from "./models";
 
 export type ModelId = string; // "deepseek-flash", "claude-opus-5-5", … (see models.ts)
@@ -84,7 +84,7 @@ export interface ProcessInfo {
   projectId: string;
   projectName: string;
   chatId: string | null;
-  by: "deepseek" | "claude" | "you";
+  by: "deepseek" | "claude" | "glm" | "you";
   background: boolean;
   sandboxed: boolean;
   status: ProcessStatus;
@@ -302,12 +302,13 @@ export interface ChatSummary {
 }
 
 export interface Settings {
-  defaultModel: ModelId; // model for new chats (DeepSeek or Claude)
+  defaultModel: ModelId; // model for new chats (any provider)
   thinking: boolean; // DeepSeek defaults
   effort: Effort;
   claudeThinking: boolean; // Claude defaults
   claudeEffort: Effort;
-  limits: { deepseek: ProviderLimits; claude: ProviderLimits }; // what each provider may ever do
+  glmEffort: Effort; // GLM defaults (it always thinks): low, high or max
+  limits: ProviderLimitsMap; // what each provider may ever do
   claudeMaxSearches: number; // web searches per reply
   claudeBlockedSites: string[]; // sites Claude's web search and page reading never use
   claudeFallback: boolean; // retry a mistaken decline on another Claude model

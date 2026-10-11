@@ -18,7 +18,7 @@ export interface RunTarget {
   chatId: string;
   folders: string[]; // the project's folders linked to this chat (short names)
   platform: Platform;
-  ai: string; // the chat's AI ("DeepSeek" or "Claude")
+  ai: string; // the chat's AI ("DeepSeek", "Claude" or "GLM")
   sendOutput: (command: string, output: string) => void; // put the output in the message box
   onStarted: () => void; // refresh the Running list
 }

@@ -1,9 +1,10 @@
 // One reply's conversation with the model, whichever provider it is. The chat route runs the
 // reply (tools, approvals, messages you send meanwhile) and asks the session for each step.
-// DeepSeek's session is here; Claude's is in claude-session.ts.
+// DeepSeek's and GLM's sessions are here (both take OpenAI-style requests); Claude's is in claude-session.ts.
 import "server-only";
 import type OpenAI from "openai";
 import { appendUser, userContent } from "./conversation";
+import { nearestEffort } from "./models";
 import type { AssistantStep, Chat, ToolCall, UserMessage } from "./types";
 
 export interface StepCallbacks {
@@ -54,13 +55,14 @@ type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 export class DeepSeekSession implements ModelSession {
   constructor(
-    private client: OpenAI,
-    private chat: Chat,
-    private messages: Msg[],
-    private tools: OpenAI.Chat.Completions.ChatCompletionTool[],
+    protected client: OpenAI,
+    protected chat: Chat,
+    protected messages: Msg[],
+    protected tools: OpenAI.Chat.Completions.ChatCompletionTool[],
   ) {}
 
-  async stream(cb: StepCallbacks, signal: AbortSignal): Promise<StepResult> {
+  // The request for one step.
+  protected params(): Record<string, unknown> {
     const { chat } = this;
     const params: Record<string, unknown> = {
       model: chat.model,
@@ -73,7 +75,20 @@ export class DeepSeekSession implements ModelSession {
     else params.max_tokens = 32_000;
     if (this.tools.length) params.tools = this.tools;
     if (this.tools.length && this.answerNow) params.tool_choice = "none";
+    return params;
+  }
 
+  // Whether its thinking goes back with each of its messages.
+  protected get thinks() {
+    return this.chat.thinking;
+  }
+
+  protected finishOf(finish: string | null, calls: number): StepResult["finish"] {
+    return finish === "length" ? "length" : finish === "insufficient_system_resource" ? "capacity" : calls ? "tool_calls" : finish === "stop" ? "stop" : "other";
+  }
+
+  async stream(cb: StepCallbacks, signal: AbortSignal): Promise<StepResult> {
+    const params = this.params();
     const pending = new Map<number, { id: string; name: string; args: string }>();
     let finish: string | null = null;
     let usage: Record<string, unknown> | null = null;
@@ -102,18 +117,15 @@ export class DeepSeekSession implements ModelSession {
       const n = (k: string) => (typeof usage![k] === "number" ? (usage![k] as number) : 0);
       const prompt = n("prompt_tokens");
       const completion = n("completion_tokens");
-      const hit = n("prompt_cache_hit_tokens");
+      // DeepSeek reports cache hits as prompt_cache_hit_tokens, GLM as prompt_tokens_details.cached_tokens.
+      const cached = (usage.prompt_tokens_details as { cached_tokens?: number } | undefined)?.cached_tokens ?? 0;
+      const hit = n("prompt_cache_hit_tokens") || cached;
       const miss = usage.prompt_cache_miss_tokens !== undefined ? n("prompt_cache_miss_tokens") : prompt - hit;
       const details = usage.completion_tokens_details as { reasoning_tokens?: number } | undefined;
       stepUsage = { prompt, completion, hit, miss, write: 0, reasoning: details?.reasoning_tokens ?? n("reasoning_tokens"), searches: 0, context: prompt + completion };
     }
     const calls = [...pending.values()].filter((c) => c.name);
-    return {
-      calls,
-      finish:
-        finish === "length" ? "length" : finish === "insufficient_system_resource" ? "capacity" : calls.length ? "tool_calls" : finish === "stop" ? "stop" : "other",
-      usage: stepUsage,
-    };
+    return { calls, finish: this.finishOf(finish, calls.length), usage: stepUsage };
   }
 
   async addUsers(users: UserMessage[]) {
@@ -126,7 +138,7 @@ export class DeepSeekSession implements ModelSession {
     const calls = result ? (steps[steps.length - 1].toolCalls ?? []).filter((c) => !c.server) : [];
     if (!content && !calls.length) return;
     const m: Record<string, unknown> = { role: "assistant", content: content || (calls.length ? null : "") };
-    if (this.chat.thinking) m.reasoning_content = reasoning;
+    if (this.thinks) m.reasoning_content = reasoning;
     if (calls.length) m.tool_calls = calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.args || "{}" } }));
     this.messages.push(m as unknown as Msg);
   }
@@ -135,9 +147,48 @@ export class DeepSeekSession implements ModelSession {
     for (const c of calls) this.messages.push({ role: "tool", tool_call_id: c.id, content: c.result ?? "" });
   }
 
-  private answerNow = false;
+  protected answerNow = false;
   forceAnswer(note: string) {
     this.messages.push({ role: "user", content: note });
     this.answerNow = true;
+  }
+}
+
+// GLM (Z.ai). Like DeepSeek, with these differences: it always thinks (effort low, high or max);
+// its thinking is kept across tool calls and replies ("preserved thinking"), so it goes back
+// exactly as it came; tool calls stream only when asked (tool_stream); usage comes with the last
+// chunk by itself; and tool_choice can only be "auto", so a forced answer is just the note.
+export class GlmSession extends DeepSeekSession {
+  protected params(): Record<string, unknown> {
+    const { chat } = this;
+    const params: Record<string, unknown> = {
+      model: chat.model,
+      messages: this.messages,
+      stream: true,
+      thinking: { type: "enabled", clear_thinking: false },
+      reasoning_effort: nearestEffort(chat.effort, ["low", "high", "max"]) ?? "high",
+      max_tokens: 65_536,
+    };
+    if (this.tools.length) {
+      params.tools = this.tools;
+      params.tool_stream = true;
+    }
+    return params;
+  }
+
+  protected get thinks() {
+    return true;
+  }
+
+  async stream(cb: StepCallbacks, signal: AbortSignal): Promise<StepResult> {
+    const r = await super.stream(cb, signal);
+    return r.finish === "refusal" ? { ...r, refusal: "content_filter" } : r;
+  }
+
+  protected finishOf(finish: string | null, calls: number): StepResult["finish"] {
+    if (finish === "sensitive") return "refusal"; // Z.ai's content filter stopped it
+    if (finish === "model_context_window_exceeded") return "context";
+    if (finish === "network_error") return "capacity";
+    return super.finishOf(finish, calls);
   }
 }

@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { FileText, Loader2, Square, Terminal } from "lucide-react";
 import { createContext, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/client";
+import { PROVIDER_NAME } from "@/lib/models";
 import type { ProcessInfo } from "@/lib/types";
 import { Button, Popover } from "./ui";
 
@@ -131,7 +132,7 @@ function RunningPanel({ procs, onChange }: { procs: ProcessInfo[]; onChange: () 
                   {p.projectName} / {p.folder}
                 </span>
                 <span>·</span>
-                <span>{p.by === "you" ? "you" : p.by === "claude" ? "Claude" : "DeepSeek"}</span>
+                <span>{p.by === "you" ? "you" : PROVIDER_NAME[p.by]}</span>
                 <span>·</span>
                 <span>{ago(p.startedAt)}</span>
                 {!p.sandboxed && <span>· not sandboxed</span>}

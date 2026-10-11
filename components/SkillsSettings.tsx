@@ -295,7 +295,7 @@ const HOW = (
     <pre className="my-1.5 whitespace-pre-wrap rounded-lg bg-code px-3 py-2 font-mono text-[11.5px] text-fg/80">
       {"---\nname: weekly-report\ndescription: How I like my weekly status reports written\n---\nKeep it under a page. Start with wins, then blockers…"}
     </pre>
-    DeepSeek and Claude only see each skill&apos;s name and description, and open the full instructions when a task matches, so you can keep
+    Every AI only sees each skill&apos;s name and description, and opens the full instructions when a task matches, so you can keep
     many skills without paying for them in every message. They can only read skills, in any mode; nothing in a skill runs.
     <br />
     <br />

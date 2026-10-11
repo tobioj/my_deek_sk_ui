@@ -1,10 +1,12 @@
-// The AI providers (DeepSeek and Claude), what each model can do, and what it costs.
+// The AI providers (DeepSeek, Claude and GLM), what each model can do, and what it costs.
 // Shared by the server and the browser. Claude's model list comes from your key (see claude.ts);
-// DeepSeek's is fixed below.
+// DeepSeek's and GLM's are fixed below.
 
-export type Provider = "deepseek" | "claude";
-export const PROVIDERS: Provider[] = ["deepseek", "claude"];
-export const PROVIDER_NAME: Record<Provider, string> = { deepseek: "DeepSeek", claude: "Claude" };
+export type Provider = "deepseek" | "claude" | "glm";
+export const PROVIDERS: Provider[] = ["deepseek", "claude", "glm"];
+export const PROVIDER_NAME: Record<Provider, string> = { deepseek: "DeepSeek", claude: "Claude", glm: "GLM" };
+// Providers that take OpenAI-style requests (Claude has its own).
+export type OpenAIProvider = Exclude<Provider, "claude">;
 
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
@@ -74,7 +76,45 @@ export const DEEPSEEK_MODELS: ModelInfo[] = [
   },
 ];
 
-export const providerOf = (model: string): Provider => (model.startsWith("deepseek") ? "deepseek" : "claude");
+// GLM (Z.ai). The ids are Z.ai's: `glm-5.3` is the flagship, `glm-5.3-flash` the fast, cheap one.
+// Both always think (it can't be switched off); effort is the control.
+export const GLM_MODELS: ModelInfo[] = [
+  {
+    id: "glm-5.3",
+    provider: "glm",
+    label: "GLM-5.3",
+    family: "GLM",
+    description: "Smartest. Text only. $1.40 / $4.40 per M tokens",
+    vision: false,
+    pdf: false,
+    context: 1_000_000,
+    maxOutput: 128_000,
+    efforts: ["low", "high", "max"],
+    thinking: "always",
+    summarize: "app",
+  },
+  {
+    id: "glm-5.3-flash",
+    provider: "glm",
+    label: "GLM-5.3 Flash",
+    family: "GLM",
+    description: "Fast and cheap. Can see images. $0.15 / $0.50 per M tokens",
+    vision: true,
+    pdf: false,
+    context: 1_000_000,
+    maxOutput: 128_000,
+    efforts: ["low", "high", "max"],
+    thinking: "always",
+    summarize: "app",
+  },
+];
+
+// The models whose details are fixed here (not fetched from a key).
+export const FIXED_MODELS: ModelInfo[] = [...DEEPSEEK_MODELS, ...GLM_MODELS];
+// The cheap model each OpenAI-style provider uses for titles and summaries.
+export const SMALL_MODEL: Record<OpenAIProvider, string> = { deepseek: "deepseek-flash", glm: "glm-5.3-flash" };
+
+export const providerOf = (model: string): Provider => (model.startsWith("deepseek") ? "deepseek" : model.startsWith("glm") ? "glm" : "claude");
 export const aiName = (model: string) => PROVIDER_NAME[providerOf(model)];
 export const validModelId = (v: unknown): v is string => typeof v === "string" && /^[a-z0-9][a-z0-9.\-]{2,100}$/.test(v);
 
@@ -96,7 +136,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // A readable name from a model id alone, for chats whose model isn't in the list (any more).
 export function labelFromId(id: string): string {
-  const d = DEEPSEEK_MODELS.find((m) => m.id === id);
+  const d = FIXED_MODELS.find((m) => m.id === id);
   if (d) return d.label;
   const p = parseClaudeId(id);
   if (p) return `${cap(p.family)} ${p.major}${p.minor ? `.${p.minor}` : ""}`;
@@ -120,7 +160,7 @@ export function atLeast(id: string, family: string, major: number, minor = 0): b
 
 // Sort for the model picker: by family, then newest first.
 export function sortModels(list: ModelInfo[]): ModelInfo[] {
-  const rank = (m: ModelInfo) => (m.provider === "deepseek" ? -1 : FAMILY_ORDER.indexOf(m.family) === -1 ? 99 : FAMILY_ORDER.indexOf(m.family));
+  const rank = (m: ModelInfo) => (m.provider !== "claude" ? -1 : FAMILY_ORDER.indexOf(m.family) === -1 ? 99 : FAMILY_ORDER.indexOf(m.family));
   const version = (m: ModelInfo) => {
     const p = parseClaudeId(m.id);
     return p ? p.major * 100 + p.minor : 0;
@@ -181,9 +221,23 @@ export function finishModelInfo(info: ModelInfo): ModelInfo {
   return info;
 }
 
-// Details for any model id: DeepSeek's are fixed; for Claude, a guess when it isn't in your key's list.
+// Details for any model id: DeepSeek's and GLM's are fixed; for Claude, a guess when it isn't in your key's list.
 export function modelInfoFor(id: string, claude: ModelInfo[] = []): ModelInfo {
-  return DEEPSEEK_MODELS.find((m) => m.id === id) ?? claude.find((m) => m.id === id) ?? guessModelInfo(id);
+  const fixed = FIXED_MODELS.find((m) => m.id === id);
+  if (fixed) return fixed;
+  // A GLM model that isn't listed (any more): treat it like the flagship.
+  if (providerOf(id) === "glm") return { ...GLM_MODELS[0], id, label: id, description: undefined, vision: false };
+  return claude.find((m) => m.id === id) ?? guessModelInfo(id);
+}
+
+// Thinking and effort for a new chat (or a chat switched to another provider): that provider's defaults.
+export function providerDefaults(
+  s: { thinking: boolean; effort: Effort; claudeThinking: boolean; claudeEffort: Effort; glmEffort: Effort },
+  provider: Provider,
+): { thinking: boolean; effort: Effort } {
+  if (provider === "claude") return { thinking: s.claudeThinking, effort: s.claudeEffort };
+  if (provider === "glm") return { thinking: true, effort: s.glmEffort }; // GLM always thinks
+  return { thinking: s.thinking, effort: s.effort };
 }
 
 // ---------- Prices (USD per million tokens) ----------
@@ -255,6 +309,8 @@ export interface ProviderLimits {
   search: boolean; // search and read the web
   code: boolean; // Claude only: run code in Anthropic's sandbox
 }
+
+export type ProviderLimitsMap = Record<Provider, ProviderLimits>;
 
 export const LIMIT_KEYS: (keyof ProviderLimits)[] = ["folders", "edit", "auto", "commands", "github", "docs", "search", "code"];
 

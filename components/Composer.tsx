@@ -26,7 +26,7 @@ import {
 import { nanoid } from "nanoid";
 import { useEffect, useRef, useState } from "react";
 import { api, estimateAttachmentTokens, type DraftAttachment } from "@/lib/client";
-import { EFFORT_SHORT, nearestEffort, PROVIDER_NAME, type ModelInfo, type ProviderLimits } from "@/lib/models";
+import { EFFORT_SHORT, nearestEffort, PROVIDER_NAME, type ModelInfo, type Provider, type ProviderLimits } from "@/lib/models";
 import { costOf, formatCost, formatTokens, isPeak } from "@/lib/tokens";
 import { isEditingMode, MODES, type Effort, type Mode, type ModelId } from "@/lib/types";
 import type { LinkedFolder } from "@/lib/folders";
@@ -53,7 +53,7 @@ export interface ComposerProps {
   model: ModelId;
   info: ModelInfo; // what the chat's model can do
   models: ModelInfo[]; // models you can pick (those whose provider has a key)
-  ai: string; // "DeepSeek" or "Claude"
+  ai: string; // "DeepSeek", "Claude" or "GLM"
   limits: ProviderLimits; // what this provider may do (Settings)
   onLimitOff: (what: keyof ProviderLimits) => void; // clicked something that's off for this provider
   thinking: boolean;
@@ -68,7 +68,7 @@ export interface ComposerProps {
   github: boolean; // this chat's GitHub toggle
   githubState: "hidden" | "ready" | "no-repos";
   onGithubSetup: () => void;
-  searchShown: boolean; // show the Search toggle (Claude chats, or DeepSeek with web search set up in Settings)
+  searchShown: boolean; // show the Search toggle (Claude chats, or DeepSeek and GLM with web search set up in Settings)
   helpers: boolean; // this chat's Helpers switch
   helpersMax: number; // helpers at once (Settings)
   folders: LinkedFolder[]; // project + chat folders (hidden = project folder switched off here)
@@ -92,7 +92,7 @@ export function Composer(p: ComposerProps) {
   const claude = p.info.provider === "claude";
   const thinkingOn = p.info.thinking === "always" || (p.info.thinking === "toggle" && p.thinking);
   const effort = nearestEffort(p.effort, p.info.efforts);
-  // Effort matters for DeepSeek only while thinking; for Claude it always does.
+  // Effort matters for DeepSeek only while thinking; for Claude and GLM it always does.
   const showEffort = !!effort && (claude || thinkingOn);
   const offTitle = (what: string) => `${what} is off for ${p.ai}. Turn it on in Settings → ${p.ai}.`;
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
@@ -447,7 +447,7 @@ export function Composer(p: ComposerProps) {
               )}
             >
               <Brain size={14} /> Think
-              {showEffort && (claude || effort === "max") ? ` · ${EFFORT_SHORT[effort!]}` : ""}
+              {showEffort && (p.info.provider !== "deepseek" || effort === "max") ? ` · ${EFFORT_SHORT[effort!]}` : ""}
             </button>
           )}
 
@@ -551,7 +551,7 @@ export function Composer(p: ComposerProps) {
             context={p.contextTokens}
             chatCost={p.chatCost}
             nextCost={nextCost}
-            claude={claude}
+            provider={p.info.provider}
             summarized={p.summarized}
             onSummarize={p.onSummarize}
             summarizing={!!p.summarizing}
@@ -662,11 +662,11 @@ export function Composer(p: ComposerProps) {
   );
 }
 
-// The models you can pick, grouped (DeepSeek, then Claude by family, newest first).
+// The models you can pick, grouped (DeepSeek, then Claude by family, newest first, then GLM).
 export function ModelList({ models, current, onPick }: { models: ModelInfo[]; current: string; onPick: (id: string) => void }) {
   const groups: { name: string; list: ModelInfo[] }[] = [];
   for (const m of models) {
-    const name = m.provider === "deepseek" ? PROVIDER_NAME.deepseek : `Claude · ${m.family}`;
+    const name = m.provider === "claude" ? `Claude · ${m.family}` : PROVIDER_NAME[m.provider];
     const g = groups.find((x) => x.name === name);
     if (g) g.list.push(m);
     else groups.push({ name, list: [m] });
@@ -710,7 +710,7 @@ function TokenMeter(t: {
   context: number;
   chatCost: number;
   nextCost: number;
-  claude: boolean;
+  provider: Provider;
   summarized: boolean;
   onSummarize?: () => void;
   summarizing: boolean;
@@ -741,9 +741,11 @@ function TokenMeter(t: {
             <Row k="Spent in this chat" v={formatCost(t.chatCost)} />
             <Row k="Next message input" v={`~${formatCost(t.nextCost)}`} />
             <div className="mt-2 text-[11.5px] leading-snug text-faint">
-              {t.claude
+              {t.provider === "claude"
                 ? "Every message resends the whole chat. Repeated context is cached and costs 10–20× less."
-                : `Every message resends the whole chat. Repeated context is cached and costs ~50× less. ${isPeak() ? "Peak hours now: prices are doubled." : "Off-peak now: half price."}`}
+                : t.provider === "glm"
+                  ? "Every message resends the whole chat. Repeated context is cached and costs ~5× less."
+                  : `Every message resends the whole chat. Repeated context is cached and costs ~50× less. ${isPeak() ? "Peak hours now: prices are doubled." : "Off-peak now: half price."}`}
             </div>
             {t.onSummarize && (
               <button

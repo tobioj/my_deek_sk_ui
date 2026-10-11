@@ -14,15 +14,15 @@ import "server-only";
 import { nanoid } from "nanoid";
 import type OpenAI from "openai";
 import type { ChatAccess } from "./access";
-import { friendlyClaudeError, getClaudeClient } from "./claude";
+import { getClaudeClient } from "./claude";
 import { ClaudeSession } from "./claude-session";
 import { buildMessages, type ToolAccess } from "./conversation";
-import { friendlyError, getClient } from "./deepseek";
 import { DOC_TOOLS, DOC_TOOL_NAMES, docsRoot, runDocReadTool } from "./docs";
 import { GITHUB_TOOLS, GITHUB_TOOL_NAMES, runGithubTool } from "./github";
 import { MAX_ROUNDS_PER_REPLY } from "./helper-tools";
 import { providerOf } from "./models";
-import { DeepSeekSession, type ModelSession, type StepCallbacks, type StepResult } from "./session";
+import { friendlyErrorFor, openAIClient, openAISession } from "./providers";
+import type { ModelSession, StepCallbacks, StepResult } from "./session";
 import { SKILL_TOOLS, SKILL_TOOL_NAMES, runSkillTool } from "./skills";
 import { getChat, updateChat } from "./storage";
 import { modelInfo } from "./summarize";
@@ -235,7 +235,7 @@ function helperSetup(ctx: HelperContext) {
   const tools = [
     ...(access.roots.length ? WORKSPACE_TOOLS : []),
     ...(access.docsPath ? DOC_TOOLS.filter((t) => nameOf(t) !== "save_document") : []),
-    ...(access.web && provider === "deepseek" ? WEB_TOOLS : []),
+    ...(access.web && provider !== "claude" ? WEB_TOOLS : []),
     ...(repos.length ? GITHUB_TOOLS : []),
     ...(access.skills.length ? SKILL_TOOLS : []),
   ];
@@ -309,7 +309,7 @@ async function runHelper(l: Live, ctx: HelperContext): Promise<void> {
       const client = await getClaudeClient();
       session = await ClaudeSession.create({ client, chat: own, settings, info: await modelInfo(chat.model), access: toolAccess, project: ctx.access.project, tools, note: null });
     } else {
-      session = new DeepSeekSession(await getClient(), own, await buildMessages(own, settings, toolAccess, ctx.access.project), tools);
+      session = openAISession(provider, await openAIClient(provider), own, await buildMessages(own, settings, toolAccess, ctx.access.project), tools);
     }
 
     for (let round = 0; round < 300; round++) {
@@ -327,7 +327,10 @@ async function runHelper(l: Live, ctx: HelperContext): Promise<void> {
       const step: AssistantStep = { content: "" };
       const server: ToolCall[] = [];
       const cb: StepCallbacks = {
-        onReasoning: () => {},
+        // Kept so it goes back with the step (GLM needs it exactly as it came; DeepSeek needs it too).
+        onReasoning: (d) => {
+          step.reasoning = (step.reasoning ?? "") + d;
+        },
         onText: (d) => {
           step.content += d;
           if (!final) run.activity = "Writing";
@@ -406,7 +409,7 @@ async function runHelper(l: Live, ctx: HelperContext): Promise<void> {
       run.report = `(Stopped before it finished.)${sofar}${looked}`;
     } else {
       run.status = "failed";
-      run.error = provider === "claude" ? friendlyClaudeError(e) : friendlyError(e);
+      run.error = friendlyErrorFor(provider, e);
       run.report = `(It failed: ${run.error})${sofar}${looked}`;
     }
   } finally {

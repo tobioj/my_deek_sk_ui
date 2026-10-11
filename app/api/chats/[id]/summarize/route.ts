@@ -1,9 +1,8 @@
 // POST /api/chats/:id/summarize — "Summarize now": the AI summarizes the chat so far and continues
 // from the summary next time (you still see every message).
 import { resolveAccess } from "@/lib/access";
-import { friendlyClaudeError } from "@/lib/claude";
-import { friendlyError } from "@/lib/deepseek";
 import { providerOf } from "@/lib/models";
+import { friendlyErrorFor } from "@/lib/providers";
 import { isReplying } from "@/lib/queue";
 import { getChat, getSettings, updateChat } from "@/lib/storage";
 import { modelInfo, summarizeChat } from "@/lib/summarize";
@@ -25,6 +24,6 @@ export async function POST(req: Request, ctx: RouteContext<"/api/chats/[id]/summ
     });
     return Response.json({ summary, extraCost: saved?.extraCost ?? cost });
   } catch (e) {
-    return Response.json({ error: providerOf(chat.model) === "claude" ? friendlyClaudeError(e) : friendlyError(e) }, { status: 500 });
+    return Response.json({ error: friendlyErrorFor(providerOf(chat.model), e) }, { status: 500 });
   }
 }

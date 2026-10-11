@@ -2,7 +2,7 @@
 import { CheckCircle2, Globe, KeyRound, Keyboard, Loader2, MessageSquareText, Palette, Paperclip, ScrollText, SlidersHorizontal, UsersRound, XCircle } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/client";
-import { EFFORT_SHORT, EFFORTS, type ModelInfo } from "@/lib/models";
+import { EFFORT_SHORT, EFFORTS, PROVIDER_NAME, PROVIDERS, type ModelInfo, type Provider } from "@/lib/models";
 import type { KeyStatus, Settings } from "@/lib/types";
 import { ProviderCard } from "./ProviderSettings";
 import { SkillsSection } from "./SkillsSettings";
@@ -37,9 +37,10 @@ interface Props {
   settings: Settings | null;
   keyStatus: KeyStatus | null;
   claudeKey: KeyStatus | null;
+  glmKey: KeyStatus | null;
   searchKey: KeyStatus | null;
   githubKey: KeyStatus | null;
-  models: { deepseek: ModelInfo[]; claude: ModelInfo[] };
+  models: Record<Provider, ModelInfo[]>;
   defaultSystemPrompt: string;
   onKeysChanged: () => void; // a key was saved or removed: reload keys and the model list
   onSaved: (s: Settings) => void;
@@ -51,11 +52,25 @@ export function SettingsDialog(props: Props) {
   return <SettingsForm {...props} settings={props.settings} />;
 }
 
-function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey, githubKey, models, defaultSystemPrompt, onKeysChanged, onSaved }: Props & { settings: Settings }) {
+function SettingsForm({
+  open,
+  onClose,
+  settings,
+  keyStatus,
+  claudeKey,
+  glmKey,
+  searchKey,
+  githubKey,
+  models,
+  defaultSystemPrompt,
+  onKeysChanged,
+  onSaved,
+}: Props & { settings: Settings }) {
   const [ghStatus, setGhStatus] = useState<KeyStatus | null>(githubKey);
   const [draft, setDraft] = useState<Settings>(settings);
   const [status, setStatus] = useState<KeyStatus | null>(keyStatus);
   const [claudeStatus, setClaudeStatus] = useState<KeyStatus | null>(claudeKey);
+  const [glmStatus, setGlmStatus] = useState<KeyStatus | null>(glmKey);
   const [busy, setBusy] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("theme") as Theme) || "system");
   const [tavilyKey, setTavilyKey] = useState("");
@@ -106,9 +121,11 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
   };
 
   // The default model can be any model you have a key for.
-  const choices = [...(status?.configured ? models.deepseek : []), ...(claudeStatus?.configured ? models.claude : [])];
+  const keyed: Record<Provider, boolean> = { deepseek: !!status?.configured, claude: !!claudeStatus?.configured, glm: !!glmStatus?.configured };
+  const choices = PROVIDERS.flatMap((p) => (keyed[p] ? models[p] : []));
   const defaultChoices = choices.length ? choices : models.deepseek;
-  const hasClaude = !!claudeStatus?.configured;
+  const hasClaude = keyed.claude;
+  const hasGlm = keyed.glm;
 
   return (
     <Modal
@@ -133,10 +150,10 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
           title="AI providers"
           icon={<KeyRound size={15} />}
           defaultOpen
-          summary={[status?.configured && "DeepSeek", claudeStatus?.configured && "Claude"].filter(Boolean).join(" · ") || "No keys yet"}
+          summary={PROVIDERS.filter((p) => keyed[p]).map((p) => PROVIDER_NAME[p]).join(" · ") || "No keys yet"}
         >
           <Fold label="How this works">
-            Add a key for DeepSeek, Claude or both, and pick the model in each chat. Keys are saved right away; the switches below are saved with
+            Add a key for DeepSeek, Claude, GLM or any of them, and pick the model in each chat. Keys are saved right away; the switches below are saved with
             <b> Save</b>.
           </Fold>
           <div className="grid gap-3 lg:grid-cols-2">
@@ -201,6 +218,24 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
                 </div>
               </Fold>
             </ProviderCard>
+            <ProviderCard
+              provider="glm"
+              status={glmStatus}
+              limits={draft.limits.glm}
+              onLimits={(l) => setDraft({ ...draft, limits: { ...draft.limits, glm: l } })}
+              onKeyChanged={(st) => {
+                setGlmStatus(st);
+                onKeysChanged();
+              }}
+            >
+              <Fold label="Billing and the GLM Coding Plan" plain className="mt-3 border-t border-line pt-2.5">
+                <p className="text-[12.5px] text-muted">
+                  GLM is billed per use from your Z.ai balance (top up at z.ai). A GLM Coding Plan subscription doesn&apos;t cover this app: Z.ai
+                  only allows it in its supported tools, like Claude Code, and can restrict or ban accounts that use it elsewhere. Web search for GLM
+                  uses your Tavily key, as for DeepSeek.
+                </p>
+              </Fold>
+            </ProviderCard>
           </div>
         </FoldSection>
 
@@ -220,13 +255,13 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
               className="h-8 max-w-64 rounded-lg border border-line bg-app px-2 text-[13px] outline-none"
             >
               {!defaultChoices.some((m) => m.id === draft.defaultModel) && <option value={draft.defaultModel}>{draft.defaultModel} (not available)</option>}
-              {["DeepSeek", "Claude"].map((group) => {
-                const list = defaultChoices.filter((m) => (m.provider === "deepseek") === (group === "DeepSeek"));
+              {PROVIDERS.map((p) => {
+                const list = defaultChoices.filter((m) => m.provider === p);
                 return list.length ? (
-                  <optgroup key={group} label={group}>
+                  <optgroup key={p} label={PROVIDER_NAME[p]}>
                     {list.map((m) => (
                       <option key={m.id} value={m.id}>
-                        {group === "Claude" ? `Claude ${m.label}` : m.label}
+                        {p === "claude" ? `Claude ${m.label}` : m.label}
                       </option>
                     ))}
                   </optgroup>
@@ -272,6 +307,24 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
                 </div>
               </div>
             )}
+            {hasGlm && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-[13.5px]" title="GLM always thinks; effort sets how much (more effort uses more tokens)">
+                    GLM: effort
+                  </span>
+                  <Segmented
+                    value={draft.glmEffort === "low" || draft.glmEffort === "max" ? draft.glmEffort : "high"}
+                    onChange={(v) => setDraft({ ...draft, glmEffort: v })}
+                    options={[
+                      { value: "low", label: "Low" },
+                      { value: "high", label: "High" },
+                      { value: "max", label: "Max" },
+                    ]}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </FoldSection>
 
@@ -286,7 +339,7 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
             <Segmented value={String(draft.summarizeAt)} onChange={(v) => setDraft({ ...draft, summarizeAt: Number(v) })} options={SUMMARIZE_OPTIONS} />
           </div>
           <Fold label="How summarizing works">
-            Past this size, the earlier messages are summarized and the AI continues from the summary: faster and cheaper, for DeepSeek and Claude.
+            Past this size, the earlier messages are summarized and the AI continues from the summary: faster and cheaper, for every provider.
             You still see every message, and the chat shows where the summary starts. You can also summarize any chat from its token meter.
           </Fold>
         </FoldSection>
@@ -329,13 +382,13 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
           </Fold>
         </FoldSection>
 
-        <FoldSection id="settings-tavily" title="Web search for DeepSeek" icon={<Globe size={15} />} summary={draft.webSearch ? "On" : "Off"}>
+        <FoldSection id="settings-tavily" title="Web search for DeepSeek and GLM" icon={<Globe size={15} />} summary={draft.webSearch ? "On" : "Off"}>
           <div className="flex items-center justify-between gap-4">
-            <span className="text-[13.5px]">Show the Search button in DeepSeek chats</span>
+            <span className="text-[13.5px]">Show the Search button in DeepSeek and GLM chats</span>
             <Switch checked={draft.webSearch} onChange={(v) => setDraft({ ...draft, webSearch: v })} label="Web search" />
           </div>
           <Fold label="How it works">
-            DeepSeek looks things up through Tavily and cites its sources. Get a free key (1,000 searches a month, no card) at{" "}
+            DeepSeek and GLM look things up through Tavily and cite their sources. Get a free key (1,000 searches a month, no card) at{" "}
             <a href="https://app.tavily.com" target="_blank" rel="noreferrer noopener" className="text-accent underline underline-offset-2">
               app.tavily.com
             </a>
@@ -404,7 +457,7 @@ function SettingsForm({ open, onClose, settings, keyStatus, claudeKey, searchKey
           summary={draft.systemPrompt.trim() === defaultSystemPrompt.trim() ? "Default" : "Your own"}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs text-muted">Sent at the start of every chat, to DeepSeek and Claude alike.</span>
+            <span className="text-xs text-muted">Sent at the start of every chat, to every AI alike.</span>
             <button type="button" onClick={() => setDraft({ ...draft, systemPrompt: defaultSystemPrompt })} className="text-xs text-muted hover:text-fg">
               Reset to default
             </button>

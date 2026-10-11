@@ -1,22 +1,23 @@
 // POST /api/chat — adds a message (or edits / regenerates), sends the conversation to the chat's
-// model (DeepSeek or Claude), streams the reply back as newline-delimited JSON, then saves it.
+// model (DeepSeek, Claude or GLM), streams the reply back as newline-delimited JSON, then saves it.
 import { nanoid } from "nanoid";
 import path from "node:path";
 import { resolveAccess, type ChatAccess } from "@/lib/access";
 import { takeEditedCommand, waitForApproval, type Decision } from "@/lib/approvals";
-import { claudeTitle, friendlyClaudeError, getClaudeClient, isClaudeAbort } from "@/lib/claude";
+import { claudeTitle, getClaudeClient, isClaudeAbort } from "@/lib/claude";
 import { ClaudeSession } from "@/lib/claude-session";
-import { buildMessages, buildUserMessage, fallbackTitle, generateTitle, modeSwitchNote } from "@/lib/conversation";
-import { friendlyError, getClient, isAbort } from "@/lib/deepseek";
+import { buildMessages, buildUserMessage, fallbackTitle, modeSwitchNote } from "@/lib/conversation";
+import { isAbort } from "@/lib/deepseek";
 import { DOC_TOOL_NAMES, docEdit, docsRoot, runDocReadTool } from "@/lib/docs";
 import { applyEdit, describe, EDIT_TOOL_NAMES, isEditError, previewEdit } from "@/lib/edits";
 import { GITHUB_TOOL_NAMES, runGithubTool } from "@/lib/github";
 import { HELPER_TOOL_NAMES, MAX_AUTO_ROUNDS } from "@/lib/helper-tools";
 import { mayHaveReports, reportsMessage, runHelperTool, takeReadyReports, type BrainContext } from "@/lib/helpers";
-import { PROVIDER_NAME } from "@/lib/models";
+import { PROVIDER_NAME, providerOf } from "@/lib/models";
+import { friendlyErrorFor, openAIClient, openAISession, openAITitle } from "@/lib/providers";
 import { endReply, finishOrTake, hasQueued, isReplying, setPhase, startReply, takeQueued } from "@/lib/queue";
 import type { Root } from "@/lib/roots";
-import { DeepSeekSession, type ModelSession, type StepCallbacks } from "@/lib/session";
+import type { ModelSession, StepCallbacks } from "@/lib/session";
 import { allowDocAutoSave, allowProjectCommand, discardUploads, getChat, getProject, getSettings, updateChat } from "@/lib/storage";
 import { modelInfo, summarizeChat, summaryDue } from "@/lib/summarize";
 import { COMMAND_TOOL_NAMES, approvalNeeded, commandTool, executeCommand, prepareCommand, recheck, type Prepared } from "@/lib/terminal";
@@ -83,6 +84,7 @@ const REFUSAL_REASON: Record<string, string> = {
   reasoning_extraction: "a request to reveal its reasoning",
   frontier_llm: "AI model development",
   general_harms: "possible harm",
+  content_filter: "sensitive content", // GLM: Z.ai's content filter
 };
 
 export async function POST(req: Request) {
@@ -145,7 +147,7 @@ export async function POST(req: Request) {
   // The reply is saved right after this message, even if another message arrives meanwhile.
   // (Messages you send while it's working move this along: see deliver() below.)
   let replyToId = chat.messages[chat.messages.length - 1].id;
-  const provider = chat.model.startsWith("deepseek") ? "deepseek" : "claude";
+  const provider = providerOf(chat.model);
   const ai = PROVIDER_NAME[provider];
 
   const encoder = new TextEncoder();
@@ -206,7 +208,7 @@ export async function POST(req: Request) {
           send({ type: "status", text: null });
         }
 
-        // The session: DeepSeek's or Claude's way of talking about this chat.
+        // The session: each provider's way of talking about this chat.
         let session: ModelSession;
         let claude: ClaudeSession | null = null;
         if (provider === "claude") {
@@ -218,9 +220,9 @@ export async function POST(req: Request) {
           claude = await ClaudeSession.create({ client, chat, settings, info, access: a.access, project: a.project, tools: a.tools, note });
           session = claude;
         } else {
-          const client = await getClient();
-          titleFor = (seed, reply) => generateTitle(client, seed, reply);
-          session = new DeepSeekSession(client, chat, await buildMessages(chat, settings, a.access, a.project), a.tools);
+          const client = await openAIClient(provider);
+          titleFor = openAITitle(provider, client);
+          session = openAISession(provider, client, chat, await buildMessages(chat, settings, a.access, a.project), a.tools);
         }
 
         // Messages you sent while it was working: save the reply so far and your messages in
@@ -490,7 +492,7 @@ export async function POST(req: Request) {
                 } else if (GITHUB_TOOL_NAMES.has(c.name)) {
                   outcomes[i] = github ? await runGithubTool(c.name, c.args, repos) : off("GitHub is off", "GitHub isn't turned on for this chat.");
                 } else if (WEB_TOOL_NAMES.has(c.name)) {
-                  outcomes[i] = web && provider === "deepseek" ? await runWebTool(c.name, c.args, abort.signal) : off("Web search is off", "web search is turned off");
+                  outcomes[i] = web && provider !== "claude" ? await runWebTool(c.name, c.args, abort.signal) : off("Web search is off", "web search is turned off");
                 } else if (COMMAND_TOOL_NAMES.has(c.name)) {
                   if (!terminal) {
                     outcomes[i] = off(
@@ -649,7 +651,7 @@ export async function POST(req: Request) {
           } else if (result.finish === "context") {
             throw new Error(`This chat is too long for ${ai}'s context window. Summarize it (the token meter's menu) or start a new chat.`);
           } else if (result.finish === "capacity") {
-            throw new Error("DeepSeek ran out of capacity mid-reply. Retry in a moment.");
+            throw new Error(`${ai} ran out of capacity mid-reply. Retry in a moment.`);
           }
           // Helper reports that came in while it was writing this answer: carry on with them.
           if (mayHaveReports(chat.id)) {
@@ -673,7 +675,7 @@ export async function POST(req: Request) {
         if (isAbort(err) || isClaudeAbort(err) || abort.signal.aborted) {
           assistant.stopped = true;
         } else {
-          assistant.error = provider === "claude" ? friendlyClaudeError(err) : friendlyError(err);
+          assistant.error = friendlyErrorFor(provider, err);
           send({ type: "error", message: assistant.error });
         }
       }

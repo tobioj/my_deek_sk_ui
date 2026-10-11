@@ -1,5 +1,5 @@
-// Turns a saved chat into the message list DeepSeek expects, plus the parts shared with Claude
-// (the system prompt, notes, and saving your messages). Claude's version is in claude-session.ts.
+// Turns a saved chat into the OpenAI-style message list DeepSeek and GLM expect, plus the parts
+// shared with Claude (the system prompt, notes, and saving your messages). Claude's version is in claude-session.ts.
 import "server-only";
 import { nanoid } from "nanoid";
 import type OpenAI from "openai";
@@ -15,7 +15,7 @@ import { COMMAND_TOOL_NAMES, type TerminalAccess } from "./terminal";
 import { WORKSPACE_TOOL_NAMES } from "./tools";
 import { WEB_TOOL_NAMES } from "./websearch";
 import { DEFAULT_SYSTEM_PROMPT, readUploadAsDataUrl, saveUpload, saveUploadBytes } from "./storage";
-import { DEEPSEEK_MODELS, labelFromId, type Provider } from "./models";
+import { labelFromId, modelInfoFor, type Provider } from "./models";
 import {
   isEditingMode,
   MODES,
@@ -347,12 +347,12 @@ export function summaryStart(chat: Chat): { start: number; text: string | null }
   return i === -1 ? { start: 0, text: null } : { start: i + 1, text: s!.text };
 }
 
-// What DeepSeek gets for one of your messages: its attached files, its text, and its images
+// What DeepSeek or GLM gets for one of your messages: its attached files, its text, and its images
 // (for models that can see them).
 export async function userContent(m: UserMessage, model: ModelId): Promise<Msg["content"]> {
   let text = [m.files, m.pdfText, m.text].filter(Boolean).join("\n\n");
   const images = m.attachments.filter((a) => a.kind === "image" && a.upload);
-  const info = DEEPSEEK_MODELS.find((x) => x.id === model) ?? DEEPSEEK_MODELS[0];
+  const info = modelInfoFor(model);
   if (images.length && info.vision) {
     const parts: Part[] = [{ type: "text", text }];
     for (const img of images) {
@@ -382,7 +382,8 @@ export async function buildMessages(chat: Chat, settings: Settings, access: Tool
   const hasFolders = access.roots.length > 0;
   const useTools =
     hasFolders || access.web || !!access.docs || access.github.length > 0 || !!access.terminal || !!access.skills?.length || !!access.helpers || !!access.helperRole?.docs;
-  const sendReasoning = useTools && chat.thinking; // DeepSeek requires past reasoning when tools are in play
+  // DeepSeek requires past reasoning when tools are in play; GLM always thinks and keeps it (preserved thinking).
+  const sendReasoning = useTools && (chat.thinking || access.provider === "glm");
   // Calls Claude's servers ran (web search, code) are never sent back as tool calls here.
   const available = (name: string, server?: boolean) =>
     !server &&
