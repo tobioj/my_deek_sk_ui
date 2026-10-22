@@ -550,8 +550,9 @@ export function ChatApp() {
   })();
 
   const updatePrefs = async (patch: Partial<Prefs>) => {
-    if (patch.webSearch && providerOf(prefs.model) !== "claude" && !searchKey?.configured) {
-      showToast(`Add your free Tavily key to use web search with ${ai}.`);
+    const deepseekSearch = settings?.searchProvider === "deepseek";
+    if (patch.webSearch && providerOf(prefs.model) !== "claude" && !(deepseekSearch ? keyStatus : searchKey)?.configured) {
+      showToast(deepseekSearch ? "Add your DeepSeek key to use DeepSeek search." : `Add your free Tavily key to use web search with ${ai}.`);
       setSettingsOpen(true);
       return;
     }

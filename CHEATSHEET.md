@@ -80,7 +80,7 @@ You need **at least one** of DeepSeek, Claude or GLM. With more than one, **Sett
 | Check a key is saved | `security find-generic-password -s glm-api-key` |
 | Remove the key | `security delete-generic-password -s glm-api-key` |
 
-**Tavily key** (only for DeepSeek's and GLM's web search; Claude has its own). Free at app.tavily.com: 1,000 searches a month, no card.
+**Tavily key** (only for DeepSeek's and GLM's web search when **Settings → Web search → Search with** is *Tavily*; with *DeepSeek* it uses your DeepSeek key instead, and Claude has its own). Free at app.tavily.com: 1,000 searches a month, no card.
 
 | I want to… | Command |
 |---|---|
@@ -95,7 +95,7 @@ You need **at least one** of DeepSeek, Claude or GLM. With more than one, **Sett
 
 | Model | Good for | Cost |
 |---|---|---|
-| **DeepSeek V4.1 Flash** | Everyday use. Fast, and can see images. | Cheapest |
+| **DeepSeek V4.1 Flash (1017)** | Everyday use. Fast, and can see images. DeepSeek updates it in place: 1017 is the October 17, 2026 version. | Cheapest |
 | **DeepSeek V4 Pro** | Hard problems. Text only. | About 4× Flash |
 | **Claude Haiku** | Quick, simple jobs | Cheapest Claude |
 | **Claude Sonnet** | Everyday work, coding | Middle |
@@ -110,7 +110,7 @@ You need **at least one** of DeepSeek, Claude or GLM. With more than one, **Sett
 |---|---|
 | **+** | Upload files or images, or **Add a folder…** |
 | **Think** | The AI reasons step by step before answering. Better for hard questions, but slower and uses more tokens. Effort is in the model dropdown (DeepSeek: High / Max; Claude: Low to Max; GLM: Low / High / Max). The newest Opus and Fable, and GLM, always think. |
-| **Search** | The AI can search the web and cite sources. DeepSeek and GLM: only visible when turned on in **Settings → Web search for DeepSeek and GLM** (Tavily key). Claude: its own search, $10 per 1,000 searches. Off by default in each chat. |
+| **Search** | The AI can search the web and cite sources. DeepSeek and GLM: only visible when turned on in **Settings → Web search for DeepSeek and GLM**, through Tavily (free key) or DeepSeek's search ($0.75 per 1,000, your DeepSeek key). Claude: its own search, $10 per 1,000 searches. Off by default in each chat. |
 | **Code** (Claude) | Claude runs Python in Anthropic's sandbox (not on your computer) for sums, charts and data files you attach. Charts it makes appear under the reply to download. |
 | **Token ring** | Hover it to see how full the chat is and what it has cost. **Summarize** there shortens a long chat now. |
 | Greyed-out button | Not allowed for this AI: **Settings → AI providers → What … may do**. Clicking it takes you there. |
@@ -264,7 +264,7 @@ This is **not** the app. It's Claude Code (a text-only coding assistant that run
 | The AI doesn't send helpers | Turn on **Helpers** by the message box. It only uses them for tasks that split into parts; you can also ask it to ("use helpers to…"). |
 | "Waiting for you" note about helper reports | The AI already replied to helpers 3 times in a row. Click **Send to …** to let it review the new reports. |
 | Search button missing | Settings → Web search → turn it on → Save |
-| Search button does nothing | Settings → Web search → add your Tavily key |
+| Search button does nothing | Settings → Web search: with *Tavily*, add your Tavily key; with *DeepSeek*, add your DeepSeek key in AI providers |
 | DeepSeek made a change you don't want | Click **Undo changes** under that reply |
 | Ask / Plan / Edit / Auto buttons missing | They only show when a folder is open: **+ → Add a folder…** |
 | DeepSeek says it can't edit files | Switch the chat to **Edit** or **Auto**. It's told about the switch in your next message. |

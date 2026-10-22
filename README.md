@@ -142,12 +142,12 @@ The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same 
 
 | | |
 |---|---|
-| **Attach files** | Drag them anywhere onto the window, paste them, or use **+ → Upload files**. Text, code, images (V4.1 Flash can see them), PDFs and Word docs. |
+| **Attach files** | Drag them anywhere onto the window, paste them, or use **+ → Upload files**. Text, code, images (V4.1 Flash and GLM-5.3 Flash can see them), PDFs and Word docs. |
 | **Attach a folder** | Drag a folder in, or **+ → Add a folder…** to get a checklist of its files. `node_modules`, `.git`, builds and binaries are skipped automatically, and `.env` files are always blocked. |
 | **Let DeepSeek explore a project** | **+ → Add a folder… → Let DeepSeek explore it.** DeepSeek then lists, reads and searches the files it needs by itself (read-only), just like Claude Code. |
 | **@-mention a file** | With a project folder open, type `@` and pick a file to attach it. |
 | **Thinking** | The **Think** button turns step-by-step reasoning on or off; the model menu sets the effort (DeepSeek: High / Max; Claude: Low to Max, depending on the model; GLM: Low / High / Max). The newest Opus and Fable, and GLM, always think. |
-| **Web search** | Off by default. Turn it on in **Settings → Web search** and add a free [Tavily](https://app.tavily.com) key (1,000 searches a month). A **Search** button then appears next to Think; when it's on, DeepSeek can search the web, read pages and cite sources. |
+| **Web search** | Off by default. Turn it on in **Settings → Web search** and pick what searches go through: **Tavily** (a free [Tavily](https://app.tavily.com) key, 1,000 searches a month) or **DeepSeek**'s own search (your DeepSeek key; $0.75 per 1,000 searches and per 1,000 pages read, included in each reply's cost). A **Search** button then appears next to Think; when it's on, DeepSeek and GLM can search the web, read pages and cite sources. |
 | **Ask / Plan / Edit / Auto** | With a folder open: **Ask** reads and answers. **Plan** writes a step-by-step plan without changing anything. **Edit** changes files, with a before/after preview and Approve/Reject for every change. **Auto** makes all the changes without asking. Every reply's changes can be undone. |
 | **Docs folder** | DeepSeek can create and update documents there in any mode (it asks first, or not, per doc). Settings sets the default; projects can set their own. |
 | **Terminal** | Per project, off by default. DeepSeek runs commands in the project's folders: look-only ones straight away, others after you click **Run** (or without asking in Auto mode on the Mac, or when you switch on **Run without asking** in a chat, in Edit and Auto mode; risky ones still ask). On the Mac they run in a sandbox (only the project folders are writable; keys, logins and the Keychain are unreadable; internet off unless you allow it). On Windows there's no sandbox, so every command but look-only ones asks. Code blocks get a free **▶ Run** button, and the **Running** list shows and stops everything still running. GitHub stays read-only. |
@@ -155,7 +155,7 @@ The `deepseek` terminal command (Claude Code running on DeepSeek) uses the same 
 | **GitHub (read-only)** | Fine-grained token, repos you tick in Settings, repos picked per project, and a GitHub button per chat (off by default). Reads code, issues, PRs, commits and CI; can't change anything. |
 | **Projects** | Group chats in the sidebar. Each project has shared context, shared files, **folders linked to every chat in it**, and a memory setting (*Project + global* or *This project only*). Chats can switch off a project folder or add their own. |
 | **Several folders** | Link as many folders as you like to a chat or project. DeepSeek sees each by name (`backend/src/app.py`, `web/src/App.tsx`) and can search, read and edit across all of them. |
-| **Models** | DeepSeek **V4.1 Flash** (fast, cheap, sees images) or **V4 Pro** (smartest, text only); every Claude model your key can use, from Haiku to Fable (the list comes from your key); and **GLM-5.3** (smartest, text only) or **GLM-5.3 Flash** (fast, cheap, sees images). Pick per chat in the model menu; **Settings → Defaults for new chats** sets which one new chats start with. |
+| **Models** | DeepSeek **V4.1 Flash (1017)** (fast, cheap, sees images) or **V4 Pro** (smartest, text only); every Claude model your key can use, from Haiku to Fable (the list comes from your key); and **GLM-5.3** (smartest, text only) or **GLM-5.3 Flash** (fast, cheap, sees images). Pick per chat in the model menu; **Settings → Defaults for new chats** sets which one new chats start with. |
 | **Long chats** | Past 200K tokens (change it in **Settings → Long chats**; sooner for models with a smaller context), the earlier messages are summarized so the chat can keep going. **Summarize** in the token ring does it any time. Works for every provider. |
 | **Skills** | Instructions you keep for kinds of tasks (how you like reports written, a checklist, a template). Every AI opens the matching skill when a task needs it. See **Skills** below. |
 | **Helpers** | Switch on **Helpers** by the message box, and the AI can send helpers to research parts of a big task at the same time. They only read; the AI judges their reports and does the acting. See **Helpers** below. |
@@ -189,7 +189,7 @@ Everything in **What you can do** works with GLM too: folders, Ask / Plan / Edit
 | **Models** | **GLM-5.3** (`glm-5.3`, Z.ai's flagship, text only, 1M context) and **GLM-5.3 Flash** (`glm-5.3-flash`, fast and cheap, sees images). Both always think; the effort (Low / High / Max) sets how much. **Settings → Defaults for new chats → GLM: effort** sets the default (High). |
 | **What GLM may do** | **Settings → AI providers → What GLM may do**: the same switches as DeepSeek (Read folders, Change files, Auto mode, Run commands, Read GitHub, Save to Docs, Web search). **All off to start**, like Claude; switch on what you want. |
 | **Billing** | Pay as you go: billed per token from the credit you top up at z.ai. A **GLM Coding Plan** subscription can't be used here: Z.ai only allows it in its supported tools (Claude Code, Cline, Cursor…) and can restrict or ban accounts that use it elsewhere, so the app always uses the pay-as-you-go endpoint. |
-| **Web search** | Through Tavily, the same as DeepSeek (**Settings → Web search** and a free Tavily key). |
+| **Web search** | The same as DeepSeek: through Tavily or DeepSeek's search, whichever you pick in **Settings → Web search**. |
 | **Titles and summaries** | Written by GLM-5.3 Flash. |
 | **Costs** | GLM-5.3: $1.40 in / $4.40 out per million tokens ($0.26 for cached input); Flash: $0.15 / $0.50. Prices are in `lib/tokens.ts`. |
 
@@ -276,7 +276,7 @@ After changing code, `deepseek-chat restart` rebuilds and restarts the everyday 
 | `components/AgentsPanel.tsx` | The helpers panel |
 | `lib/tools.ts`, `lib/files.ts` | Read-only folder tools and file access |
 | `lib/folders.ts`, `lib/roots.ts` | Which folders a chat can use (project + chat, minus switched-off) and how `name/path` maps to disk |
-| `lib/websearch.ts` | Web search tools (Tavily) |
+| `lib/websearch.ts` | Web search tools (Tavily, or DeepSeek's search and fetch) |
 | `lib/github.ts` | Read-only GitHub tools (GET requests only, checked against your allowlist) |
 | `lib/docs.ts` | Docs folder tools |
 | `lib/edits.ts`, `lib/approvals.ts` | Edit mode: file-change tools, previews, backups, undo, approvals |

@@ -44,11 +44,12 @@ export async function resolveAccess(chat: Chat, settings: Settings, req: Request
   // Folders that were moved or deleted are skipped.
   const roots = limits.folders ? await resolveRoots(chatLinkedFolders(chat, project)) : [];
   const root = roots.length > 0;
-  // DeepSeek and GLM search through Tavily (Settings flag + key); Claude uses its own web search.
+  // DeepSeek and GLM search through Tavily or DeepSeek's search (Settings flag + that service's key);
+  // Claude uses its own web search.
   const web =
     limits.search &&
     !!chat.webSearch &&
-    (provider === "claude" || (settings.webSearch && !!(await getSecret("tavily")).key));
+    (provider === "claude" || (settings.webSearch && !!(await getSecret(settings.searchProvider === "deepseek" ? "deepseek" : "tavily")).key));
   // Folder modes only apply when a project folder is open.
   // Older chats stored "Edit + always approve" as a flag; that's Auto mode now.
   let mode: Mode = root ? (chat.mode === "edit" && chat.autoApprove ? "auto" : (chat.mode ?? "ask")) : "ask";

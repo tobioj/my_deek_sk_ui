@@ -44,18 +44,19 @@ export interface ModelInfo {
 }
 
 export const DEEPSEEK_MODELS: ModelInfo[] = [
-  // `deepseek-flash` always points at DeepSeek's newest Flash model (DeepSeek-V4.1-Flash since
-  // Sept 10, 2026); `deepseek-v4-pro` is DeepSeek-V4-Pro-0813. Update the labels if DeepSeek upgrades them.
+  // `deepseek-flash` always points at DeepSeek's newest Flash model (DeepSeek-V4.1-Flash-1017 since
+  // Oct 17, 2026; the earlier versions are retired, with no id of their own); `deepseek-v4-pro` is
+  // DeepSeek-V4-Pro-0813. Update the labels if DeepSeek upgrades them.
   {
     id: "deepseek-flash",
     provider: "deepseek",
-    label: "V4.1 Flash",
+    label: "V4.1 Flash (1017)",
     family: "DeepSeek",
     description: "Fast and cheap. Can see images.",
     vision: true,
     pdf: false,
     context: 1_000_000,
-    maxOutput: 64_000,
+    maxOutput: 393_216,
     efforts: ["high", "max"],
     thinking: "toggle",
     summarize: "app",
@@ -69,7 +70,7 @@ export const DEEPSEEK_MODELS: ModelInfo[] = [
     vision: false,
     pdf: false,
     context: 1_000_000,
-    maxOutput: 64_000,
+    maxOutput: 393_216,
     efforts: ["high", "max"],
     thinking: "toggle",
     summarize: "app",

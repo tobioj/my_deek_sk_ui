@@ -46,6 +46,7 @@ interface Outcome {
   summary: string;
   ok: boolean;
   sources?: ToolCall["sources"];
+  cost?: number; // tools billed per use (DeepSeek's web search)
 }
 
 // Short line for a command's result, e.g. in the notes the AI sees about earlier replies.
@@ -627,6 +628,12 @@ export async function POST(req: Request) {
               });
             });
             session.addToolResults(toolCalls);
+            // Searches and page reads billed per use go on this reply's cost.
+            const toolCost = outcomes.reduce((n, o) => n + (o?.cost ?? 0), 0);
+            if (toolCost) {
+              assistant.usage!.cost += toolCost;
+              if (assistant.contextTokens !== undefined) send({ type: "usage", usage: { ...assistant.usage! }, contextTokens: assistant.contextTokens });
+            }
             if (abort.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
             continue;
           }

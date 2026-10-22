@@ -320,7 +320,8 @@ export interface Settings {
   helperMinutes: number; // minutes per helper before it must report
   systemPrompt: string;
   maxFileChars: number;
-  webSearch: boolean; // master flag: shows the Search toggle in the composer
+  webSearch: boolean; // master flag: shows the Search toggle in the composer (DeepSeek and GLM chats)
+  searchProvider: "tavily" | "deepseek"; // what those searches go through: Tavily (its own key) or DeepSeek's search (the DeepSeek key)
   docsFolder: string; // where DeepSeek saves docs for chats outside a project ("" = off)
   docsAutoSave: string[]; // docs (absolute paths) DeepSeek may save without asking
   githubRepos: string[]; // master allowlist of "owner/name" repos DeepSeek may read

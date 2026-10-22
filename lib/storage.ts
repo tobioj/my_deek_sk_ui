@@ -45,6 +45,7 @@ export const DEFAULT_SETTINGS: Settings = {
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   maxFileChars: 100_000,
   webSearch: false,
+  searchProvider: "tavily",
   docsFolder: "~/Documents/DeepSeek Docs",
   docsAutoSave: [],
   githubRepos: [],
@@ -220,6 +221,7 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   if (patch.effort === "high" || patch.effort === "max") next.effort = patch.effort;
   if (typeof patch.claudeThinking === "boolean") next.claudeThinking = patch.claudeThinking;
   if (isEffort(patch.claudeEffort)) next.claudeEffort = patch.claudeEffort;
+  if (patch.searchProvider === "tavily" || patch.searchProvider === "deepseek") next.searchProvider = patch.searchProvider;
   if (patch.glmEffort === "low" || patch.glmEffort === "high" || patch.glmEffort === "max") next.glmEffort = patch.glmEffort;
   if (patch.limits && typeof patch.limits === "object") {
     next.limits = {

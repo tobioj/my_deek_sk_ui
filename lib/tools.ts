@@ -77,6 +77,7 @@ export interface ToolOutcome {
   result: string; // what the model sees
   summary: string; // what the person sees
   ok: boolean;
+  cost?: number; // USD, for tools billed per use (DeepSeek's web search)
 }
 
 const MAX_RESULT_CHARS = 150_000;

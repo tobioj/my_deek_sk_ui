@@ -382,59 +382,95 @@ function SettingsForm({
           </Fold>
         </FoldSection>
 
-        <FoldSection id="settings-tavily" title="Web search for DeepSeek and GLM" icon={<Globe size={15} />} summary={draft.webSearch ? "On" : "Off"}>
+        <FoldSection
+          id="settings-tavily"
+          title="Web search for DeepSeek and GLM"
+          icon={<Globe size={15} />}
+          summary={draft.webSearch ? `On · ${draft.searchProvider === "deepseek" ? "DeepSeek search" : "Tavily"}` : "Off"}
+        >
           <div className="flex items-center justify-between gap-4">
             <span className="text-[13.5px]">Show the Search button in DeepSeek and GLM chats</span>
             <Switch checked={draft.webSearch} onChange={(v) => setDraft({ ...draft, webSearch: v })} label="Web search" />
           </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-[13.5px]">Search with</div>
+              <div className="text-xs text-muted">
+                {draft.searchProvider === "deepseek" ? "Your DeepSeek key · $0.75 per 1,000 searches and per 1,000 pages read" : "A free Tavily key · 1,000 searches a month"}
+              </div>
+            </div>
+            <Segmented
+              value={draft.searchProvider}
+              onChange={(v) => setDraft({ ...draft, searchProvider: v })}
+              options={[
+                { value: "tavily", label: "Tavily" },
+                { value: "deepseek", label: "DeepSeek" },
+              ]}
+            />
+          </div>
           <Fold label="How it works">
-            DeepSeek and GLM look things up through Tavily and cite their sources. Get a free key (1,000 searches a month, no card) at{" "}
+            DeepSeek and GLM look things up and cite their sources, through the service you pick. <b>Tavily</b>: get a free key (1,000 searches
+            a month, no card) at{" "}
             <a href="https://app.tavily.com" target="_blank" rel="noreferrer noopener" className="text-accent underline underline-offset-2">
               app.tavily.com
             </a>
-            . Claude chats use Claude&apos;s own search instead (see AI providers).
+            . <b>DeepSeek</b>: DeepSeek&apos;s own search engine, paid from your DeepSeek balance with the DeepSeek key above ($0.75 per 1,000
+            searches, and the same per 1,000 pages read; each reply&apos;s cost includes them). It works for GLM chats too. Claude chats use
+            Claude&apos;s own search instead (see AI providers).
           </Fold>
-          {(draft.webSearch || searchStatus?.configured) && (
-            <div className="rounded-xl border border-line bg-app p-3">
-              <p className="mb-2 text-[12.5px] text-muted">
-                {searchStatus?.configured ? (
-                  <>
-                    Tavily key ending in <span className="font-mono">…{searchStatus.hint}</span>,{" "}
-                    {searchStatus.source === "env" ? "from .env.local (TAVILY_API_KEY)" : SOURCE_LABEL[searchStatus.source!]}.
-                  </>
-                ) : (
-                  <>No Tavily key yet.</>
-                )}
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="password"
-                  value={tavilyKey}
-                  onChange={(e) => setTavilyKey(e.target.value)}
-                  placeholder={searchStatus?.configured ? "Paste a new key to replace it" : "tvly-…"}
-                  autoComplete="off"
-                  className="h-9 flex-1 rounded-lg border border-line bg-surface px-3 font-mono text-[13px] outline-none focus:border-line-strong"
-                />
-                <Button variant="primary" onClick={saveTavilyKey} disabled={!tavilyKey.trim() || !!busy}>
-                  {busy === "tavily" && <Loader2 size={14} className="animate-spin" />}
-                  Save key
-                </Button>
-                {searchStatus?.configured && (
-                  <Button onClick={testTavilyKey} disabled={!!busy}>
-                    {busy === "tavily-test" && <Loader2 size={14} className="animate-spin" />}
-                    Test
-                  </Button>
-                )}
-              </div>
-              {searchMsg && (
-                <div className={`mt-2 flex items-center gap-1.5 text-[12.5px] ${searchMsg.ok ? "text-green-600 dark:text-green-400" : "text-danger"}`}>
-                  {searchMsg.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />} {searchMsg.text}
-                </div>
-              )}
-              {draft.webSearch && !searchStatus?.configured && (
-                <p className="mt-2 text-xs text-warn">The Search button won&apos;t work until a Tavily key is saved.</p>
+          {draft.searchProvider === "deepseek" ? (
+            <div className="rounded-xl border border-line bg-app p-3 text-[12.5px] text-muted">
+              {status?.configured ? (
+                <>
+                  Uses your DeepSeek key ending in <span className="font-mono">…{status.hint}</span> (AI providers → DeepSeek).
+                </>
+              ) : (
+                <span className="text-warn">Add your DeepSeek key in AI providers above: the Search button won&apos;t work until it&apos;s saved.</span>
               )}
             </div>
+          ) : (
+            (draft.webSearch || searchStatus?.configured) && (
+              <div className="rounded-xl border border-line bg-app p-3">
+                <p className="mb-2 text-[12.5px] text-muted">
+                  {searchStatus?.configured ? (
+                    <>
+                      Tavily key ending in <span className="font-mono">…{searchStatus.hint}</span>,{" "}
+                      {searchStatus.source === "env" ? "from .env.local (TAVILY_API_KEY)" : SOURCE_LABEL[searchStatus.source!]}.
+                    </>
+                  ) : (
+                    <>No Tavily key yet.</>
+                  )}
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={tavilyKey}
+                    onChange={(e) => setTavilyKey(e.target.value)}
+                    placeholder={searchStatus?.configured ? "Paste a new key to replace it" : "tvly-…"}
+                    autoComplete="off"
+                    className="h-9 flex-1 rounded-lg border border-line bg-surface px-3 font-mono text-[13px] outline-none focus:border-line-strong"
+                  />
+                  <Button variant="primary" onClick={saveTavilyKey} disabled={!tavilyKey.trim() || !!busy}>
+                    {busy === "tavily" && <Loader2 size={14} className="animate-spin" />}
+                    Save key
+                  </Button>
+                  {searchStatus?.configured && (
+                    <Button onClick={testTavilyKey} disabled={!!busy}>
+                      {busy === "tavily-test" && <Loader2 size={14} className="animate-spin" />}
+                      Test
+                    </Button>
+                  )}
+                </div>
+                {searchMsg && (
+                  <div className={`mt-2 flex items-center gap-1.5 text-[12.5px] ${searchMsg.ok ? "text-green-600 dark:text-green-400" : "text-danger"}`}>
+                    {searchMsg.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />} {searchMsg.text}
+                  </div>
+                )}
+                {draft.webSearch && !searchStatus?.configured && (
+                  <p className="mt-2 text-xs text-warn">The Search button won&apos;t work until a Tavily key is saved.</p>
+                )}
+              </div>
+            )
           )}
         </FoldSection>
 

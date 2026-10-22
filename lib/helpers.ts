@@ -376,6 +376,7 @@ async function runHelper(l: Live, ctx: HelperContext): Promise<void> {
         session.addAssistant([step], result);
         run.activity = doing(calls);
         const outs = await Promise.all(calls.map((c) => readTool(c, ctx, repos, l.abort.signal)));
+        run.cost += outs.reduce((n, o) => n + (o.cost ?? 0), 0); // per-use searches (DeepSeek's)
         calls.forEach((c, i) => {
           Object.assign(c, { result: outs[i].result, summary: outs[i].summary, ok: outs[i].ok });
           run.steps.push({ summary: outs[i].summary, ok: outs[i].ok });

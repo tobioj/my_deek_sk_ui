@@ -3,7 +3,7 @@ import "server-only";
 import OpenAI, { APIConnectionError, APIError, APIUserAbortError } from "openai";
 import { forgetCachedSecret, getSecret } from "./secrets";
 
-const BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
+export const BASE_URL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 
 export class MissingKeyError extends Error {
   constructor() {
